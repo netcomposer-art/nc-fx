@@ -7,12 +7,12 @@
 // One source today: 'accent' (source 0), the audio-rate signal on the node's second input (`modInput: true`,
 // fx.modInput) or the 7th argument of createFxDsp().process(). A route sends one source to one engine target
 // with a depth. The table has MOD_MAX_ROUTES slots:
-//   routes 0-2  fixed: drive amount, drive tone, delay send. Their depths will mirror per-target dials at fixed
-//               param indexes (design-addendum-bass-gaps.md, PR B/C).
+//   routes 0-2  fixed: drive amount, drive tone, delay send. Their depths mirror the per-target dials at fixed
+//               param indexes (drive.mod_drive 16, drive.mod_tone 17; delay.mod_send comes with the send).
 //   routes 3-7  free: for a later `mods: [{src, to, depth}]` list from the state (design.md §2b). Filling them
 //               adds no params and moves no index.
-// No route has a depth yet, so the bus never switches on: with the mod signal absent, present at zero depth, or
-// present with nothing routed, the engine runs exactly the code it ran before the mod input existed.
+// With the mod signal absent, or every depth at 0, the bus stays off and the engine runs exactly the code it ran
+// before the mod input existed.
 //
 // Pure ES2019, no imports, all state in typed arrays allocated here: scripts/build.mjs inlines this file into
 // dist/worklet.js ahead of src/dsp.js.
@@ -20,11 +20,15 @@
 var MOD_SOURCES = ['accent'];
 var MOD_MAX_ROUTES = 8;
 var MOD_FIXED_ROUTES = 3;
+/** Targets (route 0-2 are bound to them). */
+var MOD_T_DRIVE_AMOUNT = 0;
+var MOD_T_DRIVE_TONE = 1;
+var MOD_T_DELAY_SEND = 2;
 
 /** A route table: RS source, RT target (-1 = unused), RD depth; M[0] is 1 while the bus is on this block. */
 function createModBus() {
   var bus = { RS: new Int32Array(MOD_MAX_ROUTES), RT: new Int32Array(MOD_MAX_ROUTES), RD: new Float64Array(MOD_MAX_ROUTES), M: new Float64Array(1) };
-  for (var r = 0; r < MOD_MAX_ROUTES; r++) bus.RT[r] = -1;
+  for (var r = 0; r < MOD_MAX_ROUTES; r++) bus.RT[r] = r < MOD_FIXED_ROUTES ? r : -1; // fixed route r -> target r
   return bus;
 }
 
@@ -62,9 +66,10 @@ function modBlock(bus, mod, frames) {
 var FX_PARAM = {
   DRIVE_ON: 0, DRIVE_DB: 1, DRIVE_OUT_DB: 2, DRIVE_MIX: 3,
   DELAY_ON: 4, DELAY_BEATS: 5, DELAY_FEEDBACK: 6, DELAY_MIX: 7,
-  PLATE_ON: 8, PLATE_PREDELAY: 9, PLATE_SIZE: 10, PLATE_DECAY: 11, PLATE_DAMPING: 12, PLATE_MIX: 13
+  PLATE_ON: 8, PLATE_PREDELAY: 9, PLATE_SIZE: 10, PLATE_DECAY: 11, PLATE_DAMPING: 12, PLATE_MIX: 13,
+  DRIVE_CURVE: 14, DRIVE_TONE: 15, DRIVE_MOD: 16, DRIVE_MOD_TONE: 17
 };
-var FX_NPARAMS = 14;
+var FX_NPARAMS = 18;
 /** Event kinds besides a parameter index. */
 var EV_TEMPO = -1;
 var EV_CLEAR = -2;
@@ -89,6 +94,10 @@ var NO_EVENT = -99; // empty staging slot
 var CLEAR_CHUNK = 4096;
 var SNAP_EPS = 1e-30; // smoothers snap onto their target this close: only a 0 target gets here, long before subnormals (2.2e-308)
 var HORIZON_S = 600; // events further ahead than this are refused
+// Drive tone LP state flushes to 0 below this: far above subnormal doubles (2.2e-308), far below anything a float32
+// output can show (1.4e-45), so it keeps subnormals out and every output sample equal to Bass's (which never flushes).
+var LP_FLUSH = 1e-200;
+var MOD_GRID = 128; // block-rate mod (drive tone) updates on absolute frames that are multiples of this, like Bass's mod[0]
 // Dattorro's line lengths at FS (0 is the pre-delay, sized separately).
 var PLATE_PAPER = [0, 142, 107, 379, 277, 672, 908, 4453, 4217, 1800, 2656, 3720, 3163];
 var L_PRE = 0, L_IN = 1, L_AP1 = 5, L_D1 = 7, L_AP2 = 9, L_D2 = 11, N_LINES = 13;
@@ -122,14 +131,19 @@ function createFxDsp(sampleRate, opts) {
   var MB = createModBus(); // mod bus (src/mod.js): routes and the per-block on flag
   // Each parameter's starting value; PRM = last applied (targets), LV/LF = value and frame of the latest-frame
   // set() so far (load() skips values that wouldn't change anything).
-  var START = [0, 0, 0, 1, 0, 0.75, 0.35, 0, 0, 0, 0.5, 0.5, 0, 0];
+  var START = [0, 0, 0, 1, 0, 0.75, 0.35, 0, 0, 0, 0.5, 0.5, 0, 0, 0, 100 / 99, 0, 0];
   var PRM = new Float64Array(START), LV = new Float64Array(START), LF = new Float64Array(FX_NPARAMS);
   var FC = new Float64Array(6); // clear({fadeMs}) state, see fadeClearSome()
   FC[1] = 1;
 
   // ---- Drive (ncDrive*: tanh with first-order antiderivative antialiasing, level kept at -12 dBFS)
-  var DR = new Float64Array(12); // 0 u0, 1 u1, 2 f0, 3 f1, 4 driveS, 5 driveT, 6 outS, 7 outT, 8 mixS, 9 mixT, 10 on, 11 onT
-  DR[8] = 1; DR[9] = 1;
+  // 12 curve (0 Smooth, 1 Acid), 13 toneT (> 1 = off), 14 lpL, 15 lpR, 16 tone LP coefficient, 17 amount mod depth
+  // this block (0 = off), 18 tone mod depth this block, 19 Acid amount for 20 (the driveS it was computed from),
+  // 21 tanh(k) for 19, 22 toneS (block-rate smoothed), 23 the tone mod sample in use
+  var DR = new Float64Array(24); // 0 u0, 1 u1, 2 f0, 3 f1, 4 driveS, 5 driveT, 6 outS, 7 outT, 8 mixS, 9 mixT, 10 on, 11 onT
+  DR[8] = 1; DR[9] = 1; DR[13] = 100 / 99; DR[22] = 1; DR[20] = -1;
+  var modBuf = null; // this block's mod signal while the bus is on (src/mod.js), else null
+  toneCoef(); // the coefficient for tone 1.0, so a tone switched on between grid frames starts from a real filter
 
   // ---- Delay (ncDelay*: one stereo tap, linear interpolation, equal-power wet/dry)
   var dn = Math.ceil(maxDelay * sr) + 8;
@@ -234,7 +248,21 @@ function createFxDsp(sampleRate, opts) {
     S[1] = d;
   }
 
-  function clearDrive() { DR[0] = 0; DR[1] = 0; DR[2] = 0; DR[3] = 0; }
+  function clearDrive() { DR[0] = 0; DR[1] = 0; DR[2] = 0; DR[3] = 0; DR[14] = 0; DR[15] = 0; }
+  // Drive tone: Bass's one-pole LP law, 500 Hz * 2^(5t), t = toneS (+ the tone mod), in Bass's order of operations.
+  function toneCoef() {
+    var t = DR[22] + DR[18] * DR[23];
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    var fc = 500 * Math.pow(2, t * 5);
+    DR[16] = 1 - Math.exp((-TWOPI * fc) / sr);
+  }
+  /** Block-rate tone update at sample j of the block (an absolute frame on the MOD_GRID): Bass's per-block smoothing. */
+  function toneBlock(j) {
+    var tT = DR[13] > 1 ? 1 : DR[13]; // off counts as 1.0 for the tone mod
+    DR[22] += (tT - DR[22]) * 0.25;
+    DR[23] = modBuf !== null ? modBuf[j] : 0;
+    toneCoef();
+  }
   function clearDelay() { dBufL.fill(0); dBufR.fill(0); DL[0] = 0; DL[10] = 0; }
   function clearPlateState() {
     for (var i = 0; i < N_LINES; i++) PW[i] = 0;
@@ -349,6 +377,7 @@ function createFxDsp(sampleRate, opts) {
       var lo = 0, hi = 1;
       if (i === EV_TEMPO) { lo = 20; hi = 400; } else if (i === 1) hi = 24; else if (i === 2) { lo = -12; hi = 12; }
       else if (i === 5) { lo = 0.0625; hi = 8; } else if (i === 6) hi = 0.9; else if (i === 9) hi = 0.2;
+      else if (i === 15) hi = 2; else if (i > 15) lo = -1;
       var x = v < lo ? lo : v > hi ? hi : v, retarget = false;
       switch (i) {
         case -1: T[0] = x; retarget = true; break;
@@ -366,6 +395,10 @@ function createFxDsp(sampleRate, opts) {
         case 11: PL[5] = x; if (snap) PL[4] = x; break;
         case 12: PL[7] = x; if (snap) PL[6] = x; break;
         case 13: PL[9] = x; if (snap) PL[8] = x; break;
+        case 14: x = x >= 0.5 ? 1 : 0; if (x !== DR[12]) { DR[0] = 0; DR[1] = 0; DR[2] = 0; DR[3] = 0; } DR[12] = x; break;
+        case 15: DR[13] = x; if (snap) { DR[22] = x > 1 ? 1 : x; toneCoef(); } break;
+        case 16: MB.RD[MOD_T_DRIVE_AMOUNT] = x; break;
+        case 17: MB.RD[MOD_T_DRIVE_TONE] = x; break;
       }
       if (retarget) {
         // Delay target in samples from beats and tempo (hacks.ts: +delayS(beats, tempo).toFixed(4)).
@@ -407,7 +440,7 @@ function createFxDsp(sampleRate, opts) {
     settle(PL, 0); settle(PL, 2); settle(PL, 4); settle(PL, 6); settle(PL, 8); settle(PL, 10);
   }
   // ---- Per-sample stages. Each reads IO[0], IO[1] and writes the result back.
-  function driveStage() {
+  function driveStage(i) {
     var xL = IO[0], xR = IO[1];
     var k = kFast;
     DR[10] += (DR[11] - DR[10]) * k;
@@ -421,11 +454,51 @@ function createFxDsp(sampleRate, opts) {
     if (Math.abs(DR[7] - DR[6]) < 1e-5) DR[6] = DR[7];
     if (Math.abs(DR[9] - DR[8]) < 1e-6) DR[8] = DR[9];
     var trim = DR[6] === 0 ? 1 : Math.pow(10, DR[6] / 20);
-    if (DR[4] === 0) {
+    var lpOn = DR[13] <= 1 || DR[18] !== 0; // tone LP in use (a tone below 100, or the tone mod on)
+    var m, sL, sR;
+    if (DR[12] === 1) {
+      // Acid: Bass's drive (ASTRID-Bass 3608858 apps/bass/src/modules/fx/fx-dsp.ts, FxChainDsp.drive), its arithmetic
+      // in its order: amount = (k - 1) / 9 with k = 10^(drive_db / 20), plus the amount mod per sample, clamped 0..1;
+      // tanh(x k) / tanh(k) * 0.9; the tone LP on the shaped signal; x + (lp - x) * mix. Input is the chain input
+      // (drive is first), already float32. test/bass-parity.test.mjs holds it bit-exact.
+      if (DR[4] !== DR[20]) { DR[20] = DR[4]; DR[19] = (Math.pow(10, DR[4] / 20) - 1) / 9; var a0 = DR[19]; a0 = a0 < 0 ? 0 : a0 > 1 ? 1 : a0; DR[21] = Math.tanh(1 + a0 * 9); }
+      var kk, tk;
+      if (DR[17] !== 0) {
+        var amt = DR[19] + DR[17] * modBuf[i];
+        amt = amt < 0 ? 0 : amt > 1 ? 1 : amt;
+        kk = 1 + amt * 9; tk = Math.tanh(kk);
+      } else {
+        var am = DR[19];
+        am = am < 0 ? 0 : am > 1 ? 1 : am;
+        kk = 1 + am * 9; tk = DR[21];
+      }
+      sL = (Math.tanh(xL * kk) / tk) * 0.9;
+      sR = xR === xL ? sL : (Math.tanh(xR * kk) / tk) * 0.9;
+      if (lpOn) {
+        var ca = DR[16], lL = DR[14], lR = DR[15];
+        lL += (sL - lL) * ca;
+        lR += (sR - lR) * ca;
+        if (lL > -LP_FLUSH && lL < LP_FLUSH) lL = 0;
+        if (lR > -LP_FLUSH && lR < LP_FLUSH) lR = 0;
+        DR[14] = lL; DR[15] = lR;
+        sL = lL; sR = lR;
+      }
+      m = DR[8];
+      // Bass parity: Bass's stages pass Float32Array buffers, so its drive output is float32. Acid path only.
+      oL = Math.fround(trim * (xL + (sL - xL) * m));
+      oR = Math.fround(trim * (xR + (sR - xR) * m));
+    } else if (DR[4] === 0 && DR[17] === 0) {
       DR[0] = 0; DR[1] = 0; DR[2] = 0; DR[3] = 0;
       oL = xL * trim; oR = xR * trim;
     } else {
-      var g = Math.pow(10, DR[4] / 20) - 1;
+      var db = DR[4];
+      if (DR[17] !== 0) {
+        // Smooth + amount mod: +-24 dB at full depth. Floored at 0.01 dB (not 0) so the antialiasing state keeps
+        // running: resetting it on every accent would replay the one-sample dip on enable (a tick per note).
+        db += DR[17] * modBuf[i] * 24;
+        db = db < 0.01 ? 0.01 : db > 24 ? 24 : db;
+      }
+      var g = Math.pow(10, db / 20) - 1;
       var comp = 0.25 / Math.tanh(0.25 * g) / g;
       var u = g * xL, ab = u < 0 ? -u : u, f = ab + Math.log(1 + Math.exp(-2 * ab)) - 0.6931471805599453, d = u - DR[0];
       var a = (d > 1e-5 || d < -1e-5) ? (f - DR[2]) / d : Math.tanh(0.5 * (u + DR[0]));
@@ -433,9 +506,18 @@ function createFxDsp(sampleRate, opts) {
       u = g * xR; ab = u < 0 ? -u : u; f = ab + Math.log(1 + Math.exp(-2 * ab)) - 0.6931471805599453; d = u - DR[1];
       var c = (d > 1e-5 || d < -1e-5) ? (f - DR[3]) / d : Math.tanh(0.5 * (u + DR[1]));
       DR[1] = u; DR[3] = f;
-      var m = DR[8];
-      oL = trim * ((1 - m) * xL + m * g * comp * a);
-      oR = trim * ((1 - m) * xR + m * g * comp * c);
+      m = DR[8];
+      if (lpOn) {
+        var ca2 = DR[16], pL2 = DR[14] + (g * comp * a - DR[14]) * ca2, pR2 = DR[15] + (g * comp * c - DR[15]) * ca2;
+        if (pL2 > -LP_FLUSH && pL2 < LP_FLUSH) pL2 = 0;
+        if (pR2 > -LP_FLUSH && pR2 < LP_FLUSH) pR2 = 0;
+        DR[14] = pL2; DR[15] = pR2;
+        oL = trim * ((1 - m) * xL + m * pL2);
+        oR = trim * ((1 - m) * xR + m * pR2);
+      } else {
+        oL = trim * ((1 - m) * xL + m * g * comp * a);
+        oR = trim * ((1 - m) * xR + m * g * comp * c);
+      }
     }
     if (b >= 0.999) { IO[0] = oL; IO[1] = oR; return; }
     if (b <= 0.001) return;
@@ -611,7 +693,7 @@ function createFxDsp(sampleRate, opts) {
       var ph = FC[0];
       if (ph === 1) { var g = FC[1] - FC[2]; if (g <= 0) { g = 0; FC[0] = 2; FC[3] = 0; FC[4] = 0; FC[5] = 0; } FC[1] = g; }
       else if (ph === 3) { g = FC[1] + FC[2]; if (g >= 1) { g = 1; FC[0] = 0; } FC[1] = g; }
-      driveStage();
+      driveStage(i);
       delayStage();
       plateStage();
       limitStage();
@@ -659,9 +741,12 @@ function createFxDsp(sampleRate, opts) {
      */
     process: function (inL, inR, outL, outR, frames, blockFrame, mod) {
       var start = blockFrame === undefined || blockFrame === null ? T[1] : +blockFrame;
-      // Mod bus (src/mod.js): off unless a mod buffer covers the block and a route has depth. No route has one
-      // yet, so this is the only mod work, once per block, and the render below is the same code as before.
-      modBlock(MB, mod, frames);
+      // Mod bus (src/mod.js): off unless a mod buffer covers the block and a route has depth. Off, the render below
+      // is the same code as without a mod input.
+      var mon = modBlock(MB, mod, frames);
+      modBuf = mon === 1 ? mod : null;
+      DR[17] = mon === 1 ? MB.RD[MOD_T_DRIVE_AMOUNT] : 0;
+      DR[18] = mon === 1 ? MB.RD[MOD_T_DRIVE_TONE] : 0;
       T[2] = 0; T[3] = 0;
       admit(); // keeps admit() hot (optimised) even when events are rare; the slot is normally empty
       var i = 0;
@@ -672,6 +757,14 @@ function createFxDsp(sampleRate, opts) {
         if (EN[0] > 0) {
           var next = EF[0] - start;
           if (next < end) end = next > i ? next : i + 1;
+        }
+        if (DR[13] <= 1 || DR[18] !== 0) {
+          // Drive tone in use: block-rate updates on the absolute MOD_GRID (Bass reads mod[0] per 128-frame block),
+          // so the result doesn't depend on the host's block size.
+          var ph = (start + i) % MOD_GRID;
+          if (ph === 0) toneBlock(i);
+          var nb = i + MOD_GRID - ph;
+          if (nb < end) end = nb;
         }
         render(inL, inR, outL, outR, i, end);
         i = end;

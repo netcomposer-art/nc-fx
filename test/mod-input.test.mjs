@@ -37,8 +37,9 @@ test('mod bus: idle until a route has a target and a depth, and only with a buff
   assert.deepEqual(MOD_SOURCES, ['accent']);
   assert.equal(MOD_MAX_ROUTES, 8); assert.equal(MOD_FIXED_ROUTES, 3);
   const bus = createModBus(), cv = new Float32Array(128).fill(0.5);
-  assert.ok(Array.from(bus.RT).every((t) => t === -1) && Array.from(bus.RD).every((d) => d === 0));
-  assert.equal(modBlock(bus, cv, 128), 0, 'no routes');
+  assert.deepEqual(Array.from(bus.RT), [0, 1, 2, -1, -1, -1, -1, -1], 'fixed routes 0-2 -> drive amount, drive tone, delay send');
+  assert.ok(Array.from(bus.RD).every((d) => d === 0));
+  assert.equal(modBlock(bus, cv, 128), 0, 'no depths')
   modRoute(bus, 0, 0, 7, 0); assert.equal(modBlock(bus, cv, 128), 0, 'zero depth');
   modRoute(bus, 4, 0, -1, 0.5); assert.equal(modBlock(bus, cv, 128), 0, 'no target');
   modRoute(bus, 4, 0, 3, 0.5);

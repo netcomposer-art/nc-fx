@@ -16,6 +16,7 @@ var NOTES = [[0.25, '1/16'], [0.5, '1/8'], [0.75, '1/8 dotted'], [1, '1/4'], [1.
 var fmtDb = function (v) { return (v > 0 ? '+' : v < 0 ? '\u2212' : '') + Math.abs(v) + ' dB'; };
 var pct = function (v) { return v + '%'; };
 var wet = function (v) { return v + '% wet'; };
+var signedPct = function (v) { return (v > 0 ? '+' : v < 0 ? '\u2212' : '') + Math.abs(v) + '%'; };
 function dial(key, label, min, max, value, format) { return { key: key, label: label, min: min, max: max, step: 1, default: value, format: format }; }
 
 /** The delay time in seconds for a note length at a tempo (ASTRID's delayS). */
@@ -27,9 +28,18 @@ export function delaySeconds(beats, bpm) { return Math.min(MAX_DELAY_S, beats * 
  */
 export var EFFECTS = [
   { type: 'drive', label: 'Drive', dials: [
-    dial('drive_db', 'Drive', 0, 24, 0, function (v) { return v === 0 ? 'clean' : fmtDb(v); }),
+    // drive_db: whole dB in Smooth (ASTRID); 0.1 dB in Acid, so Bass's amounts round-trip (stepWhen).
+    Object.assign(dial('drive_db', 'Drive', 0, 24, 0, function (v) { return v === 0 ? 'clean' : fmtDb(v); }),
+      { stepWhen: [{ key: 'curve', value: 1, step: 0.1 }] }),
     dial('output_db', 'Output', -12, 12, 0, fmtDb),
-    dial('mix', 'Mix', 0, 100, 100, wet)] },
+    dial('mix', 'Mix', 0, 100, 100, wet),
+    // Added after 0.1.0's first cut (indexes 14-17); the defaults are ASTRID's sound, so old states are unchanged.
+    { key: 'curve', label: 'Curve', min: 0, max: 1, step: null, default: 0,
+      options: [{ value: 0, label: 'Smooth' }, { value: 1, label: 'Acid' }],
+      format: function (v) { return v === 1 ? 'Acid' : 'Smooth'; } },
+    dial('tone', 'Tone', 0, 100, 100, function (v) { return v >= 100 ? 'off' : Math.round(500 * Math.pow(2, 5 * v / 99)) + ' Hz'; }),
+    dial('mod_drive', 'Accent \u2192 drive', -100, 100, 0, signedPct),
+    dial('mod_tone', 'Accent \u2192 tone', -100, 100, 0, signedPct)] },
   { type: 'delay', label: 'Delay', tempoSynced: true, dials: [
     { key: 'delay_beats', label: 'Timing', min: 0.25, max: 2, step: null, default: 0.75,
       options: NOTES.map(function (n) { return { value: n[0], label: n[1] }; }),
@@ -62,15 +72,24 @@ export function dialDef(type, key) {
   return null;
 }
 
-/** ASTRID's dialValue: non-numbers fall back to the default; options snap to the nearest; others round and clamp. */
-export function clampDial(d, raw) {
+/** The dial's step for a slot's other dials: `stepWhen` (drive_db's 0.1 in Acid) or `step`. */
+export function dialStep(d, dials) {
+  if (d.stepWhen && dials) for (var i = 0; i < d.stepWhen.length; i++) if (dials[d.stepWhen[i].key] === d.stepWhen[i].value) return d.stepWhen[i].step;
+  return d.step;
+}
+/**
+ * ASTRID's dialValue: non-numbers fall back to the default; options snap to the nearest; others round (to
+ * `step`, default whole numbers) and clamp.
+ */
+export function clampDial(d, raw, step) {
   if (typeof raw !== 'number' || !isFinite(raw)) return d.default;
   if (d.options) {
     var best = d.options[0].value;
     for (var i = 1; i < d.options.length; i++) if (Math.abs(d.options[i].value - raw) < Math.abs(best - raw)) best = d.options[i].value;
     return best;
   }
-  return Math.max(d.min, Math.min(d.max, Math.round(raw))) + 0; // + 0: no -0 in saved state
+  var inv = step > 0 && step < 1 ? Math.round(1 / step) : 1; // 0.1 -> x10: Math.round(raw * 10) / 10 lands on 10.2, not 10.200000000000001
+  return Math.max(d.min, Math.min(d.max, Math.round(raw * inv) / inv)) + 0; // + 0: no -0 in saved state
 }
 
 /** The starting state: every effect present, bypassed, at ASTRID's starting dials. */
@@ -111,8 +130,17 @@ export function migrate(raw) {
     if (type === 'delay' && dials.mix === undefined && dials.wet !== undefined) dials = Object.assign({}, dials, { mix: dials.wet });
     slot.bypass = legacy ? item.bypass === true : item.bypass !== false;
     effectDef(type).dials.forEach(function (d) { slot.dials[d.key] = clampDial(d, dials[d.key]); });
+    restep(type, slot.dials, dials);
   }
   return { state: out, dropped: dropped };
+}
+/** Re-clamps the dials whose step depends on another dial (drive_db in Acid), from their raw values. */
+export function restep(type, dials, raw) {
+  var e = effectDef(type);
+  for (var i = 0; i < e.dials.length; i++) {
+    var d = e.dials[i];
+    if (d.stepWhen) dials[d.key] = clampDial(d, raw && typeof raw[d.key] === 'number' ? raw[d.key] : dials[d.key], dialStep(d, dials));
+  }
 }
 /** migrate() without the report. */
 export function sanitize(raw) { return migrate(raw).state; }
@@ -121,10 +149,10 @@ export function sanitize(raw) { return migrate(raw).state; }
 export function cloneState(s) { return JSON.parse(JSON.stringify(s)); }
 
 /** Engine parameter count (dsp.js FX_NPARAMS; repeated so the main thread never loads the engine). */
-export var NPARAMS = 14;
+export var NPARAMS = 18;
 /** Which engine index each dial drives (dsp.js FX_PARAM; a test keeps the two in step). */
 export var PARAM_INDEX = {
-  drive: { bypass: 0, drive_db: 1, output_db: 2, mix: 3 },
+  drive: { bypass: 0, drive_db: 1, output_db: 2, mix: 3, curve: 14, tone: 15, mod_drive: 16, mod_tone: 17 },
   delay: { bypass: 4, delay_beats: 5, feedback: 6, mix: 7 },
   plate: { bypass: 8, predelay: 9, size: 10, decay: 11, damping: 12, mix: 13 }
 };
@@ -133,14 +161,15 @@ export var PARAM_INDEX = {
 export function dialToDsp(type, key, v) {
   if (key === 'bypass') return v ? 0 : 1;
   switch (type) {
-    case 'drive': return key === 'mix' ? v / 100 : v;
+    // tone: 0-99 -> t = v / 99 (Bass's 0-1 law, 500 Hz * 2^(5t)); 100 -> 100/99 > 1, which the engine reads as off.
+    case 'drive': return key === 'mix' || key === 'mod_drive' || key === 'mod_tone' ? v / 100 : key === 'tone' ? v / 99 : v;
     case 'delay': return key === 'delay_beats' ? v : v / 100;
     case 'plate': return key === 'predelay' ? v / 1000 : v / 100;
   }
   return 0;
 }
 
-var UNITS = { drive_db: 'dB', output_db: 'dB', delay_beats: 'beats', predelay: 'ms' }; // others: '%'
+var UNITS = { drive_db: 'dB', output_db: 'dB', delay_beats: 'beats', predelay: 'ms', curve: null }; // others: '%'
 /**
  * Every control as plain JSON (no functions), for hosts that build their own UI or automation:
  * {effect, key, label, index, unit, min, max, step, default, curve, control, tempoSynced[, options]}.
@@ -154,10 +183,11 @@ export function describeParams() {
     out.push({ effect: e.type, key: 'bypass', label: 'Bypass', index: PARAM_INDEX[e.type].bypass, unit: null, min: 0, max: 1, step: 1,
       default: true, curve: 'linear', control: 'toggle', tempoSynced: false });
     e.dials.forEach(function (d) {
-      var r = { effect: e.type, key: d.key, label: d.label, index: PARAM_INDEX[e.type][d.key], unit: UNITS[d.key] || '%',
+      var r = { effect: e.type, key: d.key, label: d.label, index: PARAM_INDEX[e.type][d.key], unit: d.key in UNITS ? UNITS[d.key] : '%',
         min: d.min, max: d.max, step: d.step, default: d.default, curve: d.options ? 'stepped' : 'linear',
         control: d.options ? 'select' : 'knob', tempoSynced: synced && d.key === 'delay_beats' };
       if (d.options) r.options = d.options.map(function (x) { return { value: x.value, label: x.label }; });
+      if (d.stepWhen) r.stepWhen = d.stepWhen.map(function (w) { return { key: w.key, value: w.value, step: w.step }; });
       out.push(r);
     });
   });
