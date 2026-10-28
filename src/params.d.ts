@@ -24,6 +24,7 @@ export const STATE_VERSION: 1;
 export const MAX_DELAY_S: 4.9;
 export const EFFECT_ORDER: ReadonlyArray<FxEffectType>;
 export const EFFECTS: ReadonlyArray<FxEffectDef>;
+export const NPARAMS: 14;
 export const PARAM_INDEX: Readonly<Record<FxEffectType, Readonly<Record<string, number>>>>;
 
 export function delaySeconds(beats: number, bpm: number): number;

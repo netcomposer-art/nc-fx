@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { EFFECTS, defaultState, sanitize, migrate, compile, clampDial, dialDef, dialToDsp, effectType, delaySeconds, PARAM_INDEX } from '../src/params.js';
+import { NPARAMS, EFFECTS, defaultState, sanitize, migrate, compile, clampDial, dialDef, dialToDsp, effectType, delaySeconds, PARAM_INDEX } from '../src/params.js';
 import { FX_PARAM, FX_NPARAMS } from '../src/dsp.js';
 
 test('three effects in the fixed order with ASTRID\'s dials and ranges', () => {
@@ -52,6 +52,9 @@ test('every engine index is driven by exactly one dial', () => {
   const seen = new Set();
   for (const t of Object.keys(PARAM_INDEX)) for (const i of Object.values(PARAM_INDEX[t])) { assert.ok(!seen.has(i)); seen.add(i); }
   assert.equal(seen.size, FX_NPARAMS);
+  assert.equal(NPARAMS, FX_NPARAMS);
+  const names = { drive: ['DRIVE_ON', 'DRIVE_DB', 'DRIVE_OUT_DB', 'DRIVE_MIX'], delay: ['DELAY_ON', 'DELAY_BEATS', 'DELAY_FEEDBACK', 'DELAY_MIX'], plate: ['PLATE_ON', 'PLATE_PREDELAY', 'PLATE_SIZE', 'PLATE_DECAY', 'PLATE_DAMPING', 'PLATE_MIX'] };
+  for (const t of Object.keys(names)) assert.deepEqual(Object.values(PARAM_INDEX[t]), names[t].map((n) => FX_PARAM[n]));
   const p = compile(defaultState());
   assert.equal(p.length, FX_NPARAMS);
   assert.equal(p[FX_PARAM.DRIVE_ON], 0);

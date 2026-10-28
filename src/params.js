@@ -6,7 +6,6 @@
 // them from the site's create/hacks/stack.js. One rename: the delay's `wet` dial is `mix` here, like the
 // other two effects; ASTRID's saved chains are migrated (see migrate()).
 
-import { FX_PARAM, FX_NPARAMS } from './dsp.js';
 
 export var STATE_VERSION = 1;
 export var MAX_DELAY_S = 4.9;
@@ -121,12 +120,13 @@ export function sanitize(raw) { return migrate(raw).state; }
 /** A deep copy, so callers can't reach into an instance's state. */
 export function cloneState(s) { return JSON.parse(JSON.stringify(s)); }
 
-/** Which engine index each dial drives. */
+/** Engine parameter count (dsp.js FX_NPARAMS; repeated so the main thread never loads the engine). */
+export var NPARAMS = 14;
+/** Which engine index each dial drives (dsp.js FX_PARAM; a test keeps the two in step). */
 export var PARAM_INDEX = {
-  drive: { bypass: FX_PARAM.DRIVE_ON, drive_db: FX_PARAM.DRIVE_DB, output_db: FX_PARAM.DRIVE_OUT_DB, mix: FX_PARAM.DRIVE_MIX },
-  delay: { bypass: FX_PARAM.DELAY_ON, delay_beats: FX_PARAM.DELAY_BEATS, feedback: FX_PARAM.DELAY_FEEDBACK, mix: FX_PARAM.DELAY_MIX },
-  plate: { bypass: FX_PARAM.PLATE_ON, predelay: FX_PARAM.PLATE_PREDELAY, size: FX_PARAM.PLATE_SIZE, decay: FX_PARAM.PLATE_DECAY,
-    damping: FX_PARAM.PLATE_DAMPING, mix: FX_PARAM.PLATE_MIX }
+  drive: { bypass: 0, drive_db: 1, output_db: 2, mix: 3 },
+  delay: { bypass: 4, delay_beats: 5, feedback: 6, mix: 7 },
+  plate: { bypass: 8, predelay: 9, size: 10, decay: 11, damping: 12, mix: 13 }
 };
 
 /** One dial (UI units, already clamped) to its engine value (hacks.ts hackParams). bypass -> the on flag. */
@@ -142,7 +142,7 @@ export function dialToDsp(type, key, v) {
 
 /** A clean state to the engine's program: FX_NPARAMS values in FX_PARAM order. */
 export function compile(state, into) {
-  var p = into || new Float64Array(FX_NPARAMS);
+  var p = into || new Float64Array(NPARAMS);
   var s = sanitize(state);
   s.chain.forEach(function (slot) {
     var idx = PARAM_INDEX[slot.type];
