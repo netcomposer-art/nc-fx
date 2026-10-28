@@ -172,3 +172,15 @@ test('load() of a shorter (older) program fills the rest with the defaults (no s
   fx.load([1, 12, 0, 1, 0, 0.75, 0.35, 0, 0, 0, 0.5, 0.5, 0, 0], 0, true); // a 14-value (0.1.0) program
   assert.deepEqual([fx.get(P.DRIVE_CURVE), fx.get(P.DRIVE_TONE), fx.get(P.DRIVE_MOD), fx.get(P.DRIVE_MOD_TONE)], [0, 100 / 99, 0, 0]);
 });
+
+test('no CV with depths set, blocks of 128 to 8192 frames: the same sound as a silent CV (zeroCv is preallocated to 4096)', () => {
+  const p = prog(1, 60 / 99, 0.5, -0.5), n = 16384;
+  for (const B of [128, 1024, 4096, 8192]) {
+    const L = new Float32Array(n).map((_, i) => 0.5 * Math.sin(i * 0.05)), R = L.map((v) => -0.7 * v);
+    const go = (cv) => { const fx = createFxDsp(SR); fx.load(p, 0, true); const oL = new Float32Array(n), oR = new Float32Array(n);
+      for (let o = 0; o < n; o += B) fx.process(L.subarray(o, o + B), R.subarray(o, o + B), oL.subarray(o, o + B), oR.subarray(o, o + B), B, o, cv ? cv.subarray(o, o + B) : null);
+      return [oL, oR]; };
+    const a = go(null), z = go(new Float32Array(n));
+    assert.ok(identical(a[0], z[0]) && identical(a[1], z[1]), `block ${B}`);
+  }
+});

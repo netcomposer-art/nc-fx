@@ -98,6 +98,8 @@ export function dialStep(d, dials) {
 export function clampDial(d, raw, step) {
   if (typeof raw !== 'number' || !isFinite(raw)) return d.default;
   if (d.options) {
+    // Nearest option; a tie (exactly halfway) goes to the earlier option in the list, i.e. the shorter note
+    // (strict <, ASTRID's rule): 0.1875 -> 1/32, 0.375 -> 1/16, 0.625 -> 1/8, 0.875 -> 1/8 dotted, 1.25 -> 1/4, 1.75 -> 1/4 dotted.
     var best = d.options[0].value;
     for (var i = 1; i < d.options.length; i++) if (Math.abs(d.options[i].value - raw) < Math.abs(best - raw)) best = d.options[i].value;
     return best;

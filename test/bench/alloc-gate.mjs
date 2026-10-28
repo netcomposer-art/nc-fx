@@ -14,6 +14,13 @@ const PROG = [1, 12, -3, 0.8, 1, 0.75, 0.5, 0.4, 1, 0.02, 0.6, 0.7, 0.3, 0.35];
 const BOXED = ['x', 0.2, 0.35, 0.5, 0.65, 0.8, 97.5, 101.25, 130.5, 133.33, 174.6];
 const val = (k) => BOXED[1 + (k % 5)];
 const bpm = (k) => BOXED[6 + (k % 5)];
+// More pre-boxed values for the moving-parameter scenarios: 0.3 + (k % 5) / 10 or (k % 9) / 9 computed per call is a
+// fresh HeapNumber in the harness (34,696 B over the delaySendMod window at TRIES=3, Zeta's PR C review), not the engine.
+// Each array leads with a string so its elements are generic (boxed): an all-double literal gets unboxed
+// PACKED_DOUBLE_ELEMENTS, and reading one out to pass to set() boxes it again, so the 34,696 B stayed.
+const FREE = ['x', 0.3, 0.4, 0.5, 0.6, 0.7]; // delay free time, beats: FREE[1 + k % 5]
+const NINTHS = ['x', 0, 1 / 9, 2 / 9, 3 / 9, 4 / 9, 5 / 9, 6 / 9, 7 / 9, 8 / 9]; // tones: NINTHS[1 + k % 9]
+const DRV = ['x', 6, 6.1, 6.2, 6.3, 6.4, 6.5, 6.6]; // drive dB: DRV[1 + k % 7]
 
 function window(step) {
   let i = 0;
@@ -65,13 +72,13 @@ const SCENARIOS = {
   // PR B: Acid curve + tone + accent -> drive and -> tone, a moving CV every block, drive and tone moved too.
   acidMod: () => { const fx = mk({ limiter: 'lookahead' }); const L = new Float32Array(128), R = new Float32Array(128), m = new Float32Array(128); let f = 0;
     fx.load([1, 12, 0, 1, 0, 0.75, 0.35, 0, 0, 0, 0.5, 0.5, 0, 0, 1, 0.5, 0.6, 0.4], f, true);
-    return window((k) => { if (k % 4 === 0) { fx.set(P.DRIVE_DB, 6 + (k % 7) / 10, f + 64); fx.set(P.DRIVE_TONE, (k % 9) / 9, f + 30); }
+    return window((k) => { if (k % 4 === 0) { fx.set(P.DRIVE_DB, DRV[1 + (k % 7)], f + 64); fx.set(P.DRIVE_TONE, NINTHS[1 + (k % 9)], f + 30); }
       for (let i = 0; i < 128; i++) m[i] = 0.9 * Math.exp(-(i + (k & 3) * 128) / 160);
       sine(L, f); for (let i = 0; i < 128; i++) R[i] = L[i] * 0.7; fx.process(L, R, L, R, 128, f, m); f += 128; }); },
   // PR C: Send delay with tone + low cut, free time moving and the accent on the send (mod route 2).
   delaySendMod: () => { const fx = mk({ limiter: 'soft' }); const L = new Float32Array(128), R = new Float32Array(128), m = new Float32Array(128); let f = 0;
     fx.load([0, 0, 0, 1, 1, 0.75, 0.6, 1, 0, 0, 0.5, 0.5, 0, 0, 0, 100 / 99, 0, 0, 0.5, 120, 1, 0.4, 0.6, 0.3], f, true);
-    return window((k) => { if (k % 8 === 0) { fx.set(P.DELAY_BEATS_FREE, 0.3 + (k % 5) / 10, f + 50); fx.set(P.DELAY_TONE, (k % 9) / 9, f + 20); fx.set(P.DELAY_LOW_CUT, 20 + (k % 7) * 50, f + 90); }
+    return window((k) => { if (k % 8 === 0) { fx.set(P.DELAY_BEATS_FREE, FREE[1 + (k % 5)], f + 50); fx.set(P.DELAY_TONE, NINTHS[1 + (k % 9)], f + 20); fx.set(P.DELAY_LOW_CUT, 20 + (k % 7) * 50, f + 90); }
       if (k % 64 === 0) { fx.set(P.DELAY_MODE, (k / 64) % 2, f + 5); fx.setTempo(110 + (k % 30), f + 40); }
       for (let i = 0; i < 128; i++) m[i] = 0.9 * Math.exp(-(i + (k & 3) * 128) / 160);
       sine(L, f); for (let i = 0; i < 128; i++) R[i] = L[i] * 0.7; fx.process(L, R, L, R, 128, f, m); f += 128; }); },

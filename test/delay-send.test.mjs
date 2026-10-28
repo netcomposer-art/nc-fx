@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFxDsp, FX_PARAM as P } from '../src/dsp.js';
-import { compile, defaultState, migrate } from '../src/params.js';
+import { clampDial, compile, defaultState, dialDef, migrate } from '../src/params.js';
 import { SR, identical } from './helpers.mjs';
 
 function program(dials) { const s = defaultState(); s.chain[1].bypass = false; Object.assign(s.chain[1].dials, dials); return compile(s); }
@@ -34,9 +34,18 @@ test('Free time overrides the select (and 1/32 is a note): echo positions at 120
   assert.equal(firstEcho(run(program({ mode: 1, mix: 100, feedback: 0, delay_beats: 2, beats_free: 0.5 }), x), 10), 12000);
   assert.equal(firstEcho(run(program({ mode: 1, mix: 100, feedback: 0, delay_beats: 0.125 }), x), 10), 3000);
   assert.equal(firstEcho(run(program({ mode: 1, mix: 100, feedback: 0, delay_beats: 0.75, beats_free: 0 }), x), 10), 18000);
-  // ASTRID's saved 1/16 stays 1/16; a saved value below 3/16 now lands on 1/32.
+  // ASTRID's saved 1/16 stays 1/16; a saved value at or below 3/16 now lands on 1/32 (a tie goes to the shorter note).
   assert.equal(migrate([{ type: 'delay', dials: { delay_beats: 0.25 } }]).state.chain[1].dials.delay_beats, 0.25);
   assert.equal(migrate([{ type: 'delay', dials: { delay_beats: 0.15 } }]).state.chain[1].dials.delay_beats, 0.125);
+});
+
+test('Timing ties (exactly halfway between two notes) go to the shorter note, deterministically (the ASTRID rule)', () => {
+  const d = dialDef('delay', 'delay_beats');
+  for (const [raw, want] of [[0.1875, 0.125], [0.375, 0.25], [0.625, 0.5], [0.875, 0.75], [1.25, 1], [1.75, 1.5],
+    [0.18749, 0.125], [0.18751, 0.25], [0.37501, 0.5], [1.75001, 2]]) {
+    assert.equal(clampDial(d, raw), want, String(raw));
+    assert.equal(migrate([{ type: 'delay', dials: { delay_beats: raw } }]).state.chain[1].dials.delay_beats, want, 'migrate ' + raw);
+  }
 });
 
 test('Send: mix 0 is the dry signal exactly; send 0 feeds nothing into the line', () => {

@@ -83,9 +83,13 @@ After the first merge (main 3242a05), toward what Bass still needs (design appro
   (ASTRID's equal-power wet/dry, default) or Send (dry + mix × wet, Bass's); `send` 0–100 % (default 100) and
   `mod_send` −100…+100 % (mod route 2, per sample); `beats_free` 0–2 beats (0 = off, default; otherwise 0.125–2,
   kept exactly, overriding the Timing select through the same 80 ms glide, without ASTRID's 0.1 ms rounding).
-  Timing gains 1/32 (so a saved value under 3/16 now lands on 1/32). Send renders ASTRID-Bass 3608858's delay
+  Timing gains 1/32 (so a saved value at or under 3/16 now lands on 1/32; a value exactly halfway between two notes goes to the shorter one, ASTRID's rule). Send renders ASTRID-Bass 3608858's delay
   bit-exact (its read and interpolation order, float32 line and output). The panel shows Free time as a free value
   and dims Timing while it overrides. At the defaults the engine runs the old code: ASTRID parity is bit-identical.
+  After Zeta's review of PR C: Send flushes line writes below float32's normal range to 0, so a high-feedback tail
+  with the filters off ends (it sat at 1.4e-45 for good, as in Bass; Bass parity stays max abs diff 0); the silent
+  CV used with depths set and no CV is preallocated to 4096 frames (it grew once to the block size); Timing ties are
+  documented and tested.
 - **Mod input notes (Zeta's PR A review).** A never-connected `fx.modInput` feeds silence, not `null`, which renders
   bit-identical to no mod at any depth (tested in Node and Chrome); `'discrete'` keeps channel 0 of a stereo source
   (the README shows the splitter wiring). `npm run size` labels KiB and prints exact bytes.
