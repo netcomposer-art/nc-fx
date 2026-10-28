@@ -51,6 +51,26 @@ for (const [name, tempo, spec] of CASES) {
   });
 }
 
+// With a mod signal on process()'s 7th argument (PR A: nothing routed), every case is still ASTRID's samples.
+test('parity with a mod signal present (mod input, nothing routed): all cases bit-identical to ASTRID', () => {
+  for (const [name, tempo, spec] of CASES) {
+    const state = sanitize({ v: 1, chain: Object.entries(spec).map(([type, [bypass, dials]]) => ({ type, bypass, dials })) });
+    const [inL, inR] = noiseBursts(SR * 2, tempo);
+    const chain = lib.chainCreate(SR);
+    lib.chainSet(chain, astridWidgets(state, tempo), false);
+    const fx = createFxDsp(SR, { bypassMode: 'run', limiter: 'lookahead', preGain: 0.8 });
+    fx.setTempo(tempo, 0, true);
+    fx.load(compile(state), 0, true);
+    const n = inL.length, aL = new Float32Array(n), aR = new Float32Array(n), bL = new Float32Array(n), bR = new Float32Array(n);
+    const cv = new Float32Array(n).map((_, i) => (i % 2756 < 400 ? 0.9 : 0));
+    for (let o = 0; o < n; o += 128) {
+      lib.render(chain, inL.subarray(o, o + 128), inR.subarray(o, o + 128), aL.subarray(o, o + 128), aR.subarray(o, o + 128));
+      fx.process(inL.subarray(o, o + 128), inR.subarray(o, o + 128), bL.subarray(o, o + 128), bR.subarray(o, o + 128), 128, o, cv.subarray(o, o + 128));
+    }
+    assert.ok(identical(aL, bL) && identical(aR, bR), `${name}: samples differ`);
+  }
+});
+
 // Changes while playing (Zeta's dynamic probe). Dial changes stay bit-identical. A bypass CHANGE differs on purpose
 // since Peter chose a smooth crossfade (no 0.0016 step at 0.999/0.001): identical up to it, different from it on.
 const ALL = CASES[0][2];

@@ -17,14 +17,15 @@ async function gcsDuring(fn) {
   return n;
 }
 
-for (const [limiter, bypassMode] of [[undefined, undefined], ['lookahead', 'hold'], ['soft', 'run'], ['off', 'hold']]) {
-  const label = limiter ? `limiter ${limiter}, bypass ${bypassMode}` : 'default options';
+for (const [limiter, bypassMode, withMod] of [[undefined, undefined], ['lookahead', 'hold'], ['soft', 'run'], ['off', 'hold'], ['lookahead', 'run', true]]) {
+  const label = (limiter ? `limiter ${limiter}, bypass ${bypassMode}` : 'default options') + (withMod ? ', mod input present' : '');
   test(`process() does not allocate (${label})`, async () => {
     const fx = createFxDsp(48000, limiter ? { limiter, bypassMode } : undefined);
     fx.setTempo(120, 0, true);
     fx.load([1, 12, -3, 0.8, 1, 0.75, 0.5, 0.4, 1, 0.02, 0.6, 0.7, 0.3, 0.35], 0, true);
     const inL = new Float32Array(128).map((_, i) => Math.sin(i)), inR = inL.slice();
     const oL = new Float32Array(128), oR = new Float32Array(128);
+    const mod = withMod ? new Float32Array(128).map((_, i) => (i < 40 ? 0.8 : 0)) : null;
     let f = 0;
     const run = (blocks) => {
       for (let b = 0; b < blocks; b++) {
@@ -34,7 +35,7 @@ for (const [limiter, bypassMode] of [[undefined, undefined], ['lookahead', 'hold
           fx.set(P.DELAY_ON, (b / 50) % 2 ? 0 : 1, f + 3);
           fx.set(P.PLATE_ON, (b / 100) % 2 < 1 ? 1 : 0, f + 100);
         }
-        fx.process(inL, inR, oL, oR, 128, f);
+        fx.process(inL, inR, oL, oR, 128, f, mod);
         f += 128;
       }
     };
@@ -64,7 +65,7 @@ test('hot path has no allocating syntax (static scan of the per-sample code)', (
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 const GATE = fileURLToPath(new URL('./bench/alloc-gate.mjs', import.meta.url));
-for (const scenario of ['steady', 'events', 'tempo', 'sparse', 'holdToggles', 'clearFade']) {
+for (const scenario of ['steady', 'events', 'tempo', 'sparse', 'holdToggles', 'clearFade', 'modInput']) {
   test(`heap-delta gate: 0 B and 0 GCs (${scenario})`, () => {
     const out = execFileSync(process.execPath, ['--expose-gc', '--min-semi-space-size=64', '--max-semi-space-size=64', GATE, scenario],
       { encoding: 'utf8', env: { ...process.env, TRIES: '12' } });

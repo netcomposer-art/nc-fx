@@ -14,7 +14,7 @@ function input() {
 }
 const [inL, inR] = input();
 
-async function render(edit, opts) {
+async function render(edit, opts, hook) {
   const ctx = new OfflineAudioContext(2, N, SR);
   const buf = ctx.createBuffer(2, N, SR);
   buf.copyToChannel(inL, 0); buf.copyToChannel(inR, 1);
@@ -22,9 +22,10 @@ async function render(edit, opts) {
   const s = defaultState(); if (edit) edit(s);
   const fx = createFxCore(ctx, { state: s, ...opts }); // default options
   await fx.ready;
+  if (hook) hook(ctx, fx);
   src.connect(fx.input); fx.output.connect(ctx.destination); src.start(0);
   const out = await ctx.startRendering();
-  return { L: out.getChannelData(0), R: out.getChannelData(1), status: fx.status };
+  return { L: out.getChannelData(0), R: out.getChannelData(1), status: fx.status, fx };
 }
 const same = (a, b) => a.length === b.length && a.every((v, i) => Object.is(v, b[i]) || (v === 0 && b[i] === 0));
 const rms = (a, b) => Math.sqrt(a.reduce((acc, v, i) => acc + (v - b[i]) ** 2, 0) / a.length);
@@ -48,6 +49,21 @@ async function main() {
       const by = await render((s) => { on(s); s.chain.find((c) => c.type === type).bypass = true; }, { bypassMode: mode });
       check(`${type} (${mode}) bypassed is bit-identical`, same(by.L, inL) && same(by.R, inR));
     }
+  }
+  // Mod input (PR A): fx.modInput feeds the worklet's second input; nothing is routed yet, so the sound is the same.
+  {
+    const allOn = (s) => { ON.drive(s); ON.delay(s); ON.plate(s); };
+    const ref = await render(allOn);
+    const idle = await render(allOn, { modInput: true });
+    const mi = idle.fx.modInput;
+    check('modInput: true gives a mono fx.modInput (explicit, discrete); default null', mi && mi.channelCount === 1 && mi.channelCountMode === 'explicit' && mi.channelInterpretation === 'discrete' && ref.fx.modInput === null);
+    check('mod input present, nothing connected: bit-identical to no mod input', idle.status === 'ready' && same(idle.L, ref.L) && same(idle.R, ref.R));
+    const cv = await render(allOn, { modInput: true }, (ctx, fx) => {
+      const env = ctx.createBuffer(2, N, SR); // stereo into the mono input: channel 0 is kept ('discrete')
+      for (let c = 0; c < 2; c++) { const d = env.getChannelData(c); for (let i = 0; i < N; i++) d[i] = (i % 2756) < 400 ? 0.9 - c * 0.4 : 0; }
+      const s = ctx.createBufferSource(); s.buffer = env; s.connect(fx.modInput); s.start(0);
+    });
+    check('mod input present with an accent CV connected: bit-identical to no mod input', cv.status === 'ready' && same(cv.L, ref.L) && same(cv.R, ref.R));
   }
   // Timed change on the audio clock: delay mix scheduled at 0.5 s.
   {

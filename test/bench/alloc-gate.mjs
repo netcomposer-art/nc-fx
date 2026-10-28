@@ -59,6 +59,9 @@ const SCENARIOS = {
     return window((k) => { if (k % 200 === 0) { fx.set(P.DELAY_ON, (k / 200) & 1, f); fx.set(P.PLATE_ON, (k / 200) & 1, f + 5); } sine(L, f); R.set(L); fx.process(L, R, L, R, 128, f); f += 128; }); },
   sparse: () => { const fx = mk({ limiter: 'soft' }); const b = new Float32Array(128); let f = 0;
     return window((k) => { if (k % 16 === 0) fx.set(P.DRIVE_DB, 12, f + 64); sine(b, f); fx.process(b, null, b, null, 128, f); f += 128; }); },
+  modInput: () => { const fx = mk({ limiter: 'lookahead' }); const L = new Float32Array(128), R = new Float32Array(128), m = new Float32Array(128); let f = 0;
+    return window((k) => { if (k % 4 === 0) fx.set(P.DRIVE_DB, 6 + (k % 7), f + 64); for (let i = 0; i < 128; i++) m[i] = (k & 3) === 0 ? 0.9 * Math.exp(-i / 40) : 0;
+      sine(L, f); R.set(L); fx.process(L, R, L, R, 128, f, m); f += 128; }); },
   clearFade: () => { const fx = mk({ limiter: 'soft' }); const b = new Float32Array(128); let f = 0;
     return window((k) => { if (k % 300 === 0) fx.clear(f + 7, 5); if (k % 300 === 150) fx.clear(); sine(b, f); fx.process(b, null, b, null, 128, f); f += 128; }); },
 };
