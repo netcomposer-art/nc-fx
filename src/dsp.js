@@ -531,7 +531,11 @@ export function createFxDsp(sampleRate, opts) {
     if (ms !== DL[14]) { ms += (DL[14] - ms) * kf; if (ms - DL[14] < 1e-6 && ms - DL[14] > -1e-6) ms = DL[14]; DL[13] = ms; }
     if (DL[15] !== DL[16]) { var sd = DL[16] - DL[15]; DL[15] = sd < 1e-9 && sd > -1e-9 ? DL[16] : DL[15] + sd * kf; }
     var amt = DL[15];
-    if (DL[17] !== 0 && modBuf !== null) { amt += DL[17] * modBuf[i]; amt = amt < 0 ? 0 : amt > 1 ? 1 : amt; }
+    if (DL[17] !== 0 && modBuf !== null) {
+      var cv = modBuf[i];
+      if (cv !== cv || cv === Infinity || cv === -Infinity) cv = 0; // a bad CV sample is 0 (PR B review, P2-b)
+      amt += DL[17] * cv; amt = amt < 0 ? 0 : amt > 1 ? 1 : amt;
+    }
     var filt = delayFiltersOn();
     if (ms === 1) {
       // Send (Bass's FxChainDsp.delay, operation for operation, so Bass states render bit-exact): fractional read at
