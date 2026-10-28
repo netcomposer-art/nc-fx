@@ -59,3 +59,11 @@ After the first merge (main 3242a05), toward what Bass still needs (design appro
   worklet take it as an optional 7th `process()` argument. Nothing is routed from it yet: the output is
   bit-identical with it absent, present and silent, or present and moving, and the default is unchanged (no
   `modInput`, one input). The depth dials come in the next PRs.
+- **Acid drive, drive tone, accent depths.** Four new drive dials (engine indexes 14–17; describeParams now lists
+  18): `curve` Smooth (ASTRID's, the default) or Acid (ASTRID-Bass's drive, bit-exact against Bass 3608858's
+  `fx-dsp.ts`, with float32 rounding at its output for that, Acid only); `tone` 0–100, Bass's one-pole low-pass
+  after the shaper, 100 = off (default); `mod_drive` and `mod_tone` −100…+100 %, the depths of mod routes 0 and 1
+  (accent → drive per sample, accent → tone at block rate on an absolute 128-frame grid). In Acid, `drive_db` takes
+  0.1 dB steps (`stepWhen` in describeParams) so Bass's amounts round-trip within 0.0065; Smooth keeps whole dB, and
+  `setParam('drive', 'curve', 0)` re-rounds it (posted and notified). At the defaults the engine runs the old code:
+  ASTRID parity is bit-identical and old states load unchanged.
