@@ -175,6 +175,8 @@ samples exactly.
   of amount, tone, mix and both accent depths, max abs diff 0; any block size). For that, the Acid path rounds its
   output to float32 as Bass's buffers do (`Math.fround`, Acid only). Bass applies its 0.8 before the drive; nc-fx's
   `preGain` is after the effects.
+- **Smooth choices (Zeta, 2026-10-28):** accent → drive is ±24 dB at full depth, and tone has no effect in Smooth at
+  0 dB with no accent depth (the clean path).
 - **Unchanged at the defaults.** Curve Smooth, tone off and both depths 0 run exactly the old code: the ASTRID parity
   tests are bit-identical.
 
