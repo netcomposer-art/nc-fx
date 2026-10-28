@@ -10,7 +10,8 @@ These are ASTRID's Hacks, moved into a package so that Rhythm, Bass and ASTRID a
 - **Sounds the same as ASTRID.** The DSP is a port of ASTRID's `hacks-vendor/dsp.js` and renders identical samples
   for the same settings. A test checks this against ASTRID's own file.
 - **Real-time safe.** Nothing allocates on the audio thread: no allocation in `process()` and none for a parameter,
-  tempo or bypass change. A test enforces this with a GC observer. All timing runs on the audio clock and is
+  tempo, bypass or clear event. A heap-delta gate (fixed young generation, one process per scenario) holds this at
+  0 B, and a 60 s silence test checks that denormals can't creep in. All timing runs on the audio clock and is
   sample-accurate.
 - **Transparent by default.** With every effect bypassed and default options, the output is the input, bit for bit.
   The limiter and pre-gain are opt-in (see [Defaults and each app's choice](#defaults-and-each-apps-choice)).
@@ -36,19 +37,29 @@ The generated files (`dist/`) are committed, so you don't need a build step.
 
 ```js
 import { createFx } from '@netcomposer/nc-fx';
+import { followClock } from '@netcomposer/nc-fx/tempo';
 import workletUrl from '@netcomposer/nc-fx/worklet?url';      // Vite: served as a file (see Worklet below)
+// clock: nc-clock's NcClock; mapper = new AudioClockMapper(ctx), started (nc-clock)
 
 const fx = createFx(ctx, { moduleUrl: workletUrl, bpm: 120, limiter: 'soft', state: saved?.fx });
 voiceBus.connect(fx.input);
 fx.output.connect(ctx.destination);
 fx.setParam('delay', 'bypass', false);                         // dials use UI units, as on the panel
 fx.setParam('reverb', 'mix', 25, ctx.currentTime + 0.05);      // optional AudioContext time
-clock.onChange((c) => c.kind === 'tempo' && fx.setTempo(c.bpm, clock.transport.timeAt(c.atBeat)));
+followClock(fx, clock, { mapper });                             // nc-clock: tempo on the audio clock (below)
 settingsButton.onclick = () => fx.mount(panelEl);               // loads the panel on first use
 save({ fx: fx.getState() });                                    // JSON
 ```
 
-You can use `followClock(fx, clock)` from `@netcomposer/nc-fx/tempo` instead of the `onChange` line.
+`followClock` comes from `@netcomposer/nc-fx/tempo`; `mapper` is nc-clock's `AudioClockMapper` for `ctx`. nc-clock's
+times on a `'shared'` timebase are epoch seconds, not AudioContext time, so convert them. By hand that is:
+
+```js
+clock.onChange((c) => c.kind === 'tempo' && fx.setTempo(c.bpm, mapper.toContextTime(clock.transport.timeAt(c.atBeat))));
+```
+
+A time more than 600 s ahead of `ctx.currentTime` is refused with one console warning (it is almost always a time
+on the wrong clock), so an unconverted epoch time can't silently queue forever.
 
 ## Defaults and each app's choice
 
@@ -59,6 +70,11 @@ The defaults change nothing you didn't ask for:
 | `limiter` | `'off'` | No limiter, no latency. Opt in with `'soft'` (zero-latency tanh clip to −1 dB) or `'lookahead'` (−1 dB ceiling, 1.5 ms latency). |
 | `preGain` | `1` | Unity gain before the limiter stage. |
 | `bypassMode` | `'run'` | A bypassed effect keeps running, so delay and reverb tails ring out when you bypass it and are still there when you turn it back on, as in ASTRID. `'hold'` opts in to zero CPU while bypassed, at the cost of dropping the tail. |
+| `maxDelaySeconds` | `4.9` | The longest delay (ASTRID's). The delay line is sized from it (about 0.4 MB per second at 48 kHz); up to 60. |
+
+**CPU: use `'hold'` if you don't need tails across bypass.** With `'run'` a fully bypassed chain still costs nearly
+everything: in Petra's bench, 78 of 89 µs per 128-frame block. `'run'` is the default only because it is ASTRID's
+behaviour.
 
 With all three at their defaults and every effect bypassed, the chain is exactly unity gain. The node, engine and
 real-AudioWorklet tests check this bit-for-bit using the defaults.
@@ -121,11 +137,11 @@ createFxCore(ctx: BaseAudioContext, opts?: {
 |---|---|
 | `input`, `output` | GainNodes to connect to. The chain is a dry wire until the worklet is up, then crossfades in on the audio clock. |
 | `ready`, `status` | `ready` resolves when the chain is in the signal path (`'ready'`) or has given up (`'unavailable'`: no AudioWorklet, so it stays dry). It never rejects. |
-| `setParam(effect, key, value, at?)` | Sets a dial in UI units, or `key: 'bypass'` with a boolean. `at` is an AudioContext time. It returns the stored value (clamped or snapped), or `undefined` for an unknown effect or dial. |
+| `setParam(effect, key, value, at?)` | Sets a dial in UI units, or `key: 'bypass'` with a boolean. `at` is an AudioContext time (at most 600 s ahead). It returns the stored value (clamped or snapped), or `undefined` for an unknown effect or dial or a refused time. |
 | `getParam(effect, key)` | |
 | `getState()` / `setState(state, {at?})` | `{v: 1, chain: [{id, type, bypass, dials}]}` in the fixed order. Old or partial states and ASTRID arrays are migrated. |
 | `setTempo(bpm, at?)` / `getTempo()` | The delay follows the tempo, gliding over 80 ms like tape. |
-| `clear(at?)` | Panic: drops all tails. |
+| `clear(at?)` / `clear({at?, fadeMs?})` | Panic: drops the delay and reverb tails. Instant by default, which also resets the drive's one-sample state. `fadeMs` (up to 1000) ramps the wet down first, zeroes the lines a chunk per block and ramps back in, with no click and no big fill on one block. Neither resets the limiter, so the dry signal through the lookahead carries on. |
 | `onChange(cb)` | `cb({effect, key, value})` runs after every change. It returns an unsubscribe function. |
 | `latencySamples` | 0 by default; 72 at 48 kHz with `limiter: 'lookahead'`. |
 | `dispose()` | |
@@ -142,13 +158,15 @@ the worklet loads are queued in call order and handed to the processor when it s
 - nothing is folded into the starting state, which is `opts.state` and `opts.bpm` as given at construction.
 
 `getParam` and `getState` reflect the calls at once. If AudioWorklet is unavailable, or you `dispose()` first, the
-queue is dropped. The engine schedules up to 256 future events at a time, so don't queue more future changes than
-that before `ready`.
+queue is dropped. The queue holds 256 calls; past that it folds into one load of the current state plus the tempo,
+applied when the worklet starts (so timing is lost, but nothing grows without bound). The engine itself keeps up to
+256 future events; if more arrive, the earliest are applied early rather than dropped.
 
 ### `createFx(ctx, opts?)`: the core plus a panel
 
 `createFx` returns the same object with `mount(el, {injectCss?, effects?}) → Promise<{update, destroy, root}>`. The
-panel module (`./ui.js`) is only imported on the first `mount`. You can also import `mountFxPanel` from
+panel module (`./ui.js`) is only imported on the first `mount`. If you `dispose()` while it loads, the panel comes
+back already destroyed. You can also import `mountFxPanel` from
 `@netcomposer/nc-fx/ui`.
 
 ### Inside your own AudioWorklet: `@netcomposer/nc-fx/dsp`
@@ -164,12 +182,23 @@ fx.load(program, 0, true); fx.setTempo(bpm, frame);         // frame = absolute 
 fx.process(inL, inR, outL, outR, 128, currentFrame);        // allocation-free
 ```
 
+`set`, `setTempo` and `clear(frame?, fadeMs?)` are allocation-free too and return `false` for a frame more than
+600 s ahead. Pass `startFrame: currentFrame` in the options if the engine is created mid-stream. `load()` skips
+values equal to the ones already scheduled (unless `snap`).
+
 ### Also exported
 
 - `migrate(raw) → {state, dropped}`, `sanitize`, `defaultState`, `EFFECTS` (dial metadata with formatters),
   `EFFECT_ORDER`, `loadFxWorklet(ctx, url?)` and `PROCESSOR_NAME` (`'nc-fx@1'`).
-- From `@netcomposer/nc-fx/tempo`, all duck-typed so nc-clock isn't a dependency: `followClock`,
-  `applyTempoMap(fx, map, {fromBeat, toBeat, toAudioTime})` and `bpmOf`.
+- `compile(state) → Float64Array` and `dialToDsp(type, key, value)`, for hosts that run the engine themselves.
+- `describeParams()`: every control as plain JSON, `{effect, key, label, index, unit, min, max, step, default,
+  curve, control: 'knob'|'select'|'toggle', tempoSynced, options?}`, for host UIs and automation. Readouts are kept
+  apart, as functions, in `FORMATS['delay.delay_beats'](value, bpm)`.
+- From `@netcomposer/nc-fx/tempo`, all duck-typed so nc-clock isn't a dependency:
+  `followClock(fx, clock, {mapper? | toAudioTime?, now?})`, `applyTempoMap(fx, map, {fromBeat, toBeat, toAudioTime})`
+  and `bpmOf`. `followClock` gives a late joiner the tempo playing now (`beatAt(now)` with a mapper or `now`,
+  otherwise the transport's current tempo) and schedules later changes at their times. On a `'shared'` clock
+  without a mapper or `toAudioTime`, it applies changes at once and warns once.
 
 ## Worklet: loading the processor in a Vite app
 

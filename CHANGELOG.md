@@ -16,6 +16,23 @@ API approved by Zeta's review, 2026-10-27. Changes from that review:
 - Naming is unchanged: `createFxCore(ctx)` is the node, `createFxDsp(sampleRate)` is the engine.
 - Main-thread meters are planned with the next batch of effects.
 
+Changes from Zeta's second review and Petra's performance review (2026-10-28):
+
+- **Allocation-free events.** `set`, `setTempo`, bypass and `clear` no longer allocate on the audio thread (they
+  did: about 77, 189 and 37 B per call). The API only stages into typed arrays; the queue work runs in code that
+  `process()` keeps optimised. A heap-delta gate holds 0 B per window; the GC-count test stays.
+- **Denormals.** Smoothers snap onto their target within 1e-30 once per block, so silence can't decay into
+  subnormal doubles (µs/block used to climb 1.7× in `'run'` and 3.3× in `'hold'` after ~15 s of silence).
+- **Clock time.** `followClock` takes `{mapper}` (nc-clock's `AudioClockMapper`) or `{toAudioTime}`, gives a late
+  joiner the tempo playing now, and on a `'shared'` clock without a mapping applies changes at once with a warning.
+  Times more than 600 s ahead are refused everywhere (one warning), and a full engine queue applies its earliest
+  events early instead of dropping any. The README example converts with `toContextTime`.
+- `clear({at, fadeMs})` fades the wet out and back in; the instant `clear()` no longer resets the limiter, so the
+  lookahead keeps its dry signal (it zeroed 72 samples).
+- `maxDelaySeconds` option; `describeParams()` and `FORMATS`; `compile` and `dialToDsp` from the main entry;
+  `load()` skips unchanged values; the pre-ready queue is capped at 256 (then folds); `mount()` can't leak a
+  panel when `dispose()` runs first; `NOTICE.md` is published.
+
 First cut:
 
 - First cut, extracted from ASTRID (NetComposer-Synth 024f200): drive, tempo-synced delay and plate reverb,
