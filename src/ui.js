@@ -106,7 +106,12 @@ export function mountFxPanel(el, opts) {
   });
 
   function show(c, fromHost) {
-    var v = fx.getParam(c.type, c.key);
+    var v = fx.getParam(c.type, c.key), w = c.def.stepWhen;
+    if (w) { // drive_db: 0.1 dB steps while curve is Acid
+      var st = c.def.step;
+      for (var j = 0; j < w.length; j++) if (fx.getParam(c.type, w[j].key) === w[j].value) st = w[j].step;
+      c.input.step = String(st);
+    }
     if (fromHost && c.input.value !== String(v)) c.input.setAttribute('data-modulated', '');
     if (c.input.value !== String(v)) c.input.value = String(v);
     c.out.textContent = c.def.format(v, fx.getTempo ? fx.getTempo() : 120);
@@ -127,7 +132,7 @@ export function mountFxPanel(el, opts) {
     var fromHost = !touching;
     if (!ch || ch.effect === null) { update(fromHost); return; }
     if (ch.key === 'bypass') { showHead(ch.effect); return; }
-    controls.forEach(function (c) { if (c.type === ch.effect && c.key === ch.key) show(c, fromHost); });
+    controls.forEach(function (c) { if (c.type === ch.effect && (c.key === ch.key || c.def.stepWhen)) show(c, fromHost); });
   });
   update(false);
   el.appendChild(root);
