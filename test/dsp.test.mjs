@@ -39,6 +39,17 @@ for (const mode of ['hold', 'run']) {
   });
 }
 
+test('default bypass is run: a bypassed delay keeps its tail ringing (ASTRID)', () => {
+  const imp = new Float32Array(SR); imp[0] = 1;
+  const fx = engine(prog((s) => { s.chain[1].bypass = false; s.chain[1].dials.mix = 100; s.chain[1].dials.feedback = 80; }));
+  renderDsp(fx, imp.subarray(0, 4800), null);
+  fx.set(P.DELAY_ON, 0);
+  renderDsp(fx, new Float32Array(SR / 2), null);
+  fx.set(P.DELAY_ON, 1);
+  const [o] = renderDsp(fx, new Float32Array(SR), null);
+  assert.ok(o.reduce((a, v) => a + v * v, 0) > 1e-4);
+});
+
 test('hold: a bypassed effect drops its tail; run keeps it (ASTRID)', () => {
   const imp = new Float32Array(SR), z = new Float32Array(SR); imp[0] = 1;
   const p = prog((s) => { s.chain[1].bypass = false; s.chain[1].dials.mix = 100; s.chain[1].dials.feedback = 80; });

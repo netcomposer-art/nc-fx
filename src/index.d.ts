@@ -12,6 +12,7 @@ export interface FxCoreOptions {
   bpm?: number;
   /** URL of dist/worklet.js (e.g. Vite `import u from '@netcomposer/nc-fx/worklet?url'`). Omitted: Blob URL. */
   moduleUrl?: string | URL;
+  /** Default 'run' (tails ring out, like ASTRID). 'hold': zero CPU while bypassed, tails dropped. */
   bypassMode?: 'hold' | 'run';
   /** Default 'off' (transparent). Opt in: 'soft' (zero latency) or 'lookahead' (1.5 ms latency). */
   limiter?: 'lookahead' | 'soft' | 'off';

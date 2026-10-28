@@ -18,6 +18,7 @@ test('wires input -> node -> output once the worklet loads, sending the compiled
   assert.equal(fx.latencySamples, 0); // limiter off by default
   assert.equal(ctx.node.options.processorOptions.limiter, 'off');
   assert.equal(ctx.node.options.processorOptions.preGain, 1);
+  assert.equal(ctx.node.options.processorOptions.bypassMode, 'run');
   assert.equal(createFxCore(mockContext(), { limiter: 'lookahead' }).latencySamples, 72);
 });
 

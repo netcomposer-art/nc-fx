@@ -6,7 +6,7 @@ export const FX_PARAM: Readonly<{
 export const FX_NPARAMS: 14;
 
 export interface FxDspOptions {
-  /** 'hold' (default): a bypassed effect costs nothing and its tail is dropped. 'run': it keeps running (ASTRID). */
+  /** 'run' (default): a bypassed effect keeps running, so its tail rings out (ASTRID). 'hold': it costs nothing and its tail is dropped. */
   bypassMode?: 'hold' | 'run';
   /** 'off' (default), 'lookahead' (-1 dB ceiling, 1.5 ms latency), 'soft' (zero-latency tanh clip to -1 dB). */
   limiter?: 'lookahead' | 'soft' | 'off';

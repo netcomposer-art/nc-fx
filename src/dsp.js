@@ -44,7 +44,7 @@ function fxCoef(seconds, sr) { return 1 - Math.exp(-1 / (seconds * sr)); }
 export function createFxDsp(sampleRate, opts) {
   var o = opts || {};
   var sr = +sampleRate > 0 ? +sampleRate : 48000;
-  var hold = o.bypassMode !== 'run';
+  var hold = o.bypassMode === 'hold'; // default 'run': bypassed effects keep running, so tails ring out (ASTRID)
   // Transparent by default: limiter off and pre-gain 1, so an all-bypassed chain is bit-identical to its input.
   var limMode = o.limiter === 'lookahead' ? 1 : o.limiter === 'soft' ? 2 : 0;
   var preGain = typeof o.preGain === 'number' && o.preGain >= 0 && o.preGain < 16 ? o.preGain : 1;
