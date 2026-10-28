@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createFxDsp } from '../src/dsp.js';
-import { compile, sanitize, delaySeconds } from '../src/params.js';
+import { compile, sanitize, delaySeconds, PARAM_INDEX, dialToDsp } from '../src/params.js';
 import { SR, noiseBursts, renderDsp, identical } from './helpers.mjs';
 
 const FIXTURE = new URL('./fixtures/astrid-hacks-dsp.cjs', import.meta.url);
@@ -50,3 +50,36 @@ for (const [name, tempo, spec] of CASES) {
     assert.ok(identical(aL, bL) && identical(aR, bR), 'samples differ');
   });
 }
+
+// Changes while playing (Zeta's dynamic probe). Dial changes stay bit-identical. A bypass CHANGE differs on purpose
+// since Peter chose a smooth crossfade (no 0.0016 step at 0.999/0.001): identical up to it, different from it on.
+const ALL = CASES[0][2];
+const EVENTS = [{ block: 100, type: 'delay', key: 'mix', v: 90 }, { block: 150, type: 'plate', key: 'size', v: 10 }, { block: 200, type: 'drive', key: 'drive_db', v: 3 },
+  { block: 260, type: 'delay', key: 'feedback', v: 85 }, { block: 300, type: 'plate', key: 'bypass', v: true }, { block: 420, type: 'plate', key: 'bypass', v: false },
+  { block: 500, type: 'delay', key: 'delay_beats', v: 0.25 }, { block: 560, type: 'drive', key: 'bypass', v: true }, { block: 600, type: 'plate', key: 'predelay', v: 150 }];
+function firstDiff(events) {
+  const tempo = 120, state = sanitize({ v: 1, chain: Object.entries(ALL).map(([type, [bypass, dials]]) => ({ type, bypass, dials: { ...dials } })) });
+  const [inL, inR] = noiseBursts(SR * 2, tempo);
+  const chain = lib.chainCreate(SR); lib.chainSet(chain, astridWidgets(state, tempo), false);
+  const patch = lib.fns.find((f) => f.name === 'ncChainPatch');
+  const fx = createFxDsp(SR, { bypassMode: 'run', limiter: 'lookahead', preGain: 0.8 }); fx.setTempo(tempo, 0, true); fx.load(compile(state), 0, true);
+  const n = inL.length, aL = new Float32Array(n), aR = new Float32Array(n), bL = new Float32Array(n), bR = new Float32Array(n);
+  for (let o = 0; o < n; o += 128) {
+    for (const ev of events) if (ev.block * 128 === o) {
+      const slot = state.chain.find((c) => c.type === ev.type);
+      if (ev.key === 'bypass') slot.bypass = ev.v; else slot.dials[ev.key] = ev.v;
+      fx.set(PARAM_INDEX[ev.type][ev.key], dialToDsp(ev.type, ev.key, ev.v));
+      for (const w of astridWidgets(state, tempo)) patch(chain, w.id, w.params, w.bypass, false);
+    }
+    lib.render(chain, inL.subarray(o, o + 128), inR.subarray(o, o + 128), aL.subarray(o, o + 128), aR.subarray(o, o + 128));
+    fx.process(inL.subarray(o, o + 128), inR.subarray(o, o + 128), bL.subarray(o, o + 128), bR.subarray(o, o + 128), 128);
+  }
+  for (let i = 0; i < n; i++) if (aL[i] !== bL[i] || aR[i] !== bR[i]) return i;
+  return -1;
+}
+test('parity while playing: dial changes are bit-identical to ASTRID', () => {
+  assert.equal(firstDiff(EVENTS.filter((e) => e.key !== 'bypass')), -1);
+});
+test('parity while playing: identical up to the first bypass change, then the smooth crossfade differs (on purpose)', () => {
+  assert.equal(firstDiff(EVENTS), 300 * 128 + Math.round(0.0015 * SR));
+});
