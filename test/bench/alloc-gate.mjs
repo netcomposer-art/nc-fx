@@ -62,6 +62,12 @@ const SCENARIOS = {
   modInput: () => { const fx = mk({ limiter: 'lookahead' }); const L = new Float32Array(128), R = new Float32Array(128), m = new Float32Array(128); let f = 0;
     return window((k) => { if (k % 4 === 0) fx.set(P.DRIVE_DB, 6 + (k % 7), f + 64); for (let i = 0; i < 128; i++) m[i] = (k & 3) === 0 ? 0.9 * Math.exp(-i / 40) : 0;
       sine(L, f); R.set(L); fx.process(L, R, L, R, 128, f, m); f += 128; }); },
+  // PR B: Acid curve + tone + accent -> drive and -> tone, a moving CV every block, drive and tone moved too.
+  acidMod: () => { const fx = mk({ limiter: 'lookahead' }); const L = new Float32Array(128), R = new Float32Array(128), m = new Float32Array(128); let f = 0;
+    fx.load([1, 12, 0, 1, 0, 0.75, 0.35, 0, 0, 0, 0.5, 0.5, 0, 0, 1, 0.5, 0.6, 0.4], f, true);
+    return window((k) => { if (k % 4 === 0) { fx.set(P.DRIVE_DB, 6 + (k % 7) / 10, f + 64); fx.set(P.DRIVE_TONE, (k % 9) / 9, f + 30); }
+      for (let i = 0; i < 128; i++) m[i] = 0.9 * Math.exp(-(i + (k & 3) * 128) / 160);
+      sine(L, f); for (let i = 0; i < 128; i++) R[i] = L[i] * 0.7; fx.process(L, R, L, R, 128, f, m); f += 128; }); },
   clearFade: () => { const fx = mk({ limiter: 'soft' }); const b = new Float32Array(128); let f = 0;
     return window((k) => { if (k % 300 === 0) fx.clear(f + 7, 5); if (k % 300 === 150) fx.clear(); sine(b, f); fx.process(b, null, b, null, 128, f); f += 128; }); },
 };

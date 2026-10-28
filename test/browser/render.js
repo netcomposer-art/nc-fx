@@ -1,5 +1,6 @@
 // Runs in headless Chrome: real AudioWorklet in an OfflineAudioContext, plus the panel in a real DOM.
-import { createFxCore, createFx, defaultState } from '../../src/index.js';
+import { createFxCore, createFx, defaultState, compile } from '../../src/index.js';
+import { createFxDsp } from '../../src/dsp.js';
 
 const SR = 48000, N = SR; // 1 s
 const results = [];
@@ -65,6 +66,25 @@ async function main() {
     });
     check('mod input present with an accent CV connected: bit-identical to no mod input', cv.status === 'ready' && same(cv.L, ref.L) && same(cv.R, ref.R));
   }
+  // PR B: Acid + tone + both accent depths in the real worklet == the engine run here in 128-frame blocks.
+  {
+    const cvBuf = new Float32Array(N);
+    for (let i = 0; i < N; i++) cvBuf[i] = (i % 6000) < 1500 ? Math.exp(-(i % 6000) / 500) : 0;
+    const acid = (s) => { Object.assign(s.chain[0], { bypass: false }); Object.assign(s.chain[0].dials, { curve: 1, drive_db: 10.2, tone: 40, mod_drive: 50, mod_tone: 30 }); ON.delay(s); };
+    const connectCv = (ctx, fx) => { const b = ctx.createBuffer(1, N, SR); b.copyToChannel(cvBuf, 0); const s = ctx.createBufferSource(); s.buffer = b; s.connect(fx.modInput); s.start(0); };
+    const w = await render(acid, { modInput: true }, connectCv);
+    const st = defaultState(); acid(st);
+    const eng = createFxDsp(SR); eng.setTempo(120, 0, true); eng.load(compile(st), 0, true);
+    const eL = new Float32Array(N), eR = new Float32Array(N);
+    for (let o = 0; o < N; o += 128) eng.process(inL.subarray(o, o + 128), inR.subarray(o, o + 128), eL.subarray(o, o + 128), eR.subarray(o, o + 128), 128, o, cvBuf.subarray(o, o + 128));
+    // Chrome's audio thread flushes float32 subnormals (FTZ) and this page doesn't: compare with those as 0.
+    const TINY = 1.1754943508222875e-38, ftz = (v) => (Math.abs(v) < TINY ? 0 : v);
+    const sameFtz = (x, y) => x.every((v, i) => ftz(v) === ftz(y[i]));
+    const sub = eL.filter((v) => v !== 0 && Math.abs(v) < TINY).length;
+    check('Acid + tone + accent: worklet output == engine output (bit-identical; float32 subnormals as 0)', w.status === 'ready' && sameFtz(w.L, eL) && sameFtz(w.R, eR), `${rms(w.L, eL)}, ${sub} subnormal samples here`);
+    const noCv = await render(acid, { modInput: true });
+    check('Acid accent depths move the sound only with a CV connected', rms(w.L, noCv.L) > 1e-3, rms(w.L, noCv.L).toFixed(4));
+  }
   // Timed change on the audio clock: delay mix scheduled at 0.5 s.
   {
     const ctx = new OfflineAudioContext(2, N, SR);
@@ -102,6 +122,15 @@ async function main() {
     const panel = await fx.mount(document.getElementById('panel'));
     const slider = document.querySelector('[data-testid="nc-fx-plate-mix"]');
     check('panel renders 3 sections', document.querySelectorAll('.nc-fx-sec').length === 3);
+    const dsl = document.querySelector('[data-testid="nc-fx-drive-drive_db"]'), curveSel = document.querySelector('[data-testid="nc-fx-drive-curve"]');
+    const step0 = dsl.step;
+    curveSel.value = '1'; curveSel.dispatchEvent(new Event('change'));
+    const step1 = dsl.step;
+    fx.setParam('drive', 'drive_db', 7.3);
+    const v1 = dsl.value;
+    fx.setParam('drive', 'curve', 0);
+    check('panel: Curve select; Drive slider steps 0.1 dB in Acid, whole dB in Smooth', curveSel.tagName === 'SELECT' && step0 === '1' && step1 === '0.1' && v1 === '7.3' && dsl.step === '1' && dsl.value === '7' && fx.getParam('drive', 'drive_db') === 7, [step0, step1, v1, dsl.step, dsl.value]);
+    check('panel: tone readout says off at 100', document.querySelector('[data-testid="nc-fx-drive-tone"]').parentNode.querySelector('output').textContent === 'off');
     slider.value = '42'; slider.dispatchEvent(new Event('input'));
     check('moving a slider sets the param', fx.getParam('plate', 'mix') === 42);
     check('user-moved slider is not marked modulated', !slider.hasAttribute('data-modulated'));
