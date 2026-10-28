@@ -91,15 +91,16 @@ const rms = (a, from = 0, to = a.length) => { let s = 0; for (let i = from; i < 
 const hf = (a) => { let s = 0; for (let i = 1; i < a.length; i++) { const d = a[i] - a[i - 1]; s += d * d; } return Math.sqrt(s / a.length); };
 const finite = (a) => a.every((v) => Number.isFinite(v));
 
-test('new settings off: Smooth, tone off, depths set but no mod / depths 0 with mod -> bit-identical to the old engine', () => {
-  const ref = run(BASE, 128, null);
-  for (const [label, p, mod] of [['defaults', prog(0, 100 / 99, 0, 0), CV], ['depths, no mod', prog(0, 100 / 99, 0.7, 0.4), null],
-    ['depths, mod shorter than the block', prog(0, 100 / 99, 0.7, 0.4), 'short']]) {
-    const out = mod === 'short' ? (() => { const fx = createFxDsp(SR); fx.load(p, 0, true); const oL = new Float32Array(N), oR = new Float32Array(N);
-      for (let o = 0; o < N; o += 128) fx.process(inL.subarray(o, o + 128), inR.subarray(o, o + 128), oL.subarray(o, o + 128), oR.subarray(o, o + 128), 128, o, CV.subarray(o, o + 64)); return [oL, oR]; })()
-      : run(p, 128, mod);
-    assert.ok(identical(out[0], ref[0]) && identical(out[1], ref[1]), label);
-  }
+test('new settings off: Smooth, tone off, depths 0 with mod -> bit-identical to the old engine; depths with no CV == a silent CV', () => {
+  const ref = run(BASE, 128, null), withCv = run(prog(0, 100 / 99, 0, 0), 128, CV);
+  assert.ok(identical(withCv[0], ref[0]) && identical(withCv[1], ref[1]), 'defaults, with mod');
+  // Depths set: no CV, a CV shorter than the block and a silent CV are all the same sound (Zeta, PR B P2-a). It is not
+  // the old engine: the depths keep the mod paths on (e.g. the tone LP with a tone mod), as they would with a silent CV.
+  const p = prog(0, 100 / 99, 0.7, 0.4), silent = run(p, 128, new Float32Array(N)), none = run(p, 128, null);
+  const fx = createFxDsp(SR); fx.load(p, 0, true); const oL = new Float32Array(N), oR = new Float32Array(N);
+  for (let o = 0; o < N; o += 128) fx.process(inL.subarray(o, o + 128), inR.subarray(o, o + 128), oL.subarray(o, o + 128), oR.subarray(o, o + 128), 128, o, CV.subarray(o, o + 64));
+  assert.ok(identical(none[0], silent[0]) && identical(none[1], silent[1]), 'depths, no mod');
+  assert.ok(identical(oL, silent[0]) && identical(oR, silent[1]), 'depths, mod shorter than the block');
 });
 
 test('tone darkens (Smooth and Acid); accent -> drive moves the drive only on accents; outputs finite', () => {
@@ -134,4 +135,40 @@ test('switching curve mid-stream, tone on/off, depths, panic: no NaN, no jump be
   }
   assert.ok(finite(oL) && finite(oR));
   assert.ok(oL.every((v) => Math.abs(v) <= 1.0001));
+});
+
+// ---- Zeta's PR B review (P2-a, P2-b, P3-2)
+function renderMod(dials, mod, n = SR, opts) {
+  let s = 5; const rnd = () => (s = (s * 1664525 + 1013904223) >>> 0) / 4294967296;
+  const L = new Float32Array(n).map((_, i) => 0.5 * Math.sin(i * 0.05) + 0.2 * (rnd() * 2 - 1)), R = L.map((v) => -0.7 * v);
+  const fx = createFxDsp(SR, opts); fx.load(compile(sanitize({ v: 1, chain: [{ type: 'drive', bypass: false, dials }] })), 0, true);
+  const oL = new Float32Array(n), oR = new Float32Array(n);
+  for (let o = 0; o < n; o += 128) fx.process(L.subarray(o, o + 128), R.subarray(o, o + 128), oL.subarray(o, o + 128), oR.subarray(o, o + 128), 128, o, typeof mod === 'function' ? mod(o) : mod ? mod.subarray(o, o + 128) : null);
+  return [oL, oR];
+}
+test('a silent CV sounds exactly like no CV, at any depths (72 settings; also a CV shorter than the block)', () => {
+  const n = 24000, Z = new Float32Array(n), short = new Float32Array(64);
+  for (const curve of [0, 1]) for (const drive_db of [0, 12]) for (const tone of [100, 60]) for (const mod_drive of [0, 50, -50]) for (const mod_tone of [0, -50, 50]) {
+    const d = { curve, drive_db, tone, mix: 100, output_db: 0, mod_drive, mod_tone };
+    const a = renderMod(d, null, n), b = renderMod(d, Z, n), c = renderMod(d, () => short, n);
+    assert.ok(identical(a[0], b[0]) && identical(a[1], b[1]), 'zero CV ' + JSON.stringify(d));
+    assert.ok(identical(a[0], c[0]) && identical(a[1], c[1]), 'short CV ' + JSON.stringify(d));
+  }
+});
+test('a NaN or infinite CV sample counts as 0: nothing non-finite, and no state is poisoned', () => {
+  const n = 24000;
+  for (const bad of [NaN, Infinity, -Infinity]) for (const at of [12805, 12800]) for (const d of [
+    { curve: 1, drive_db: 10, tone: 100, mod_drive: 50 }, { curve: 1, drive_db: 10, tone: 60, mod_tone: 50 },
+    { curve: 0, drive_db: 6, tone: 100, mod_drive: 50 }, { curve: 0, drive_db: 6, tone: 60, mod_tone: 50 }]) {
+    const cv = new Float32Array(n).fill(0.3), ref = cv.slice(); cv[at] = bad; ref[at] = 0;
+    const [a] = renderMod(d, cv, n), [b] = renderMod(d, ref, n);
+    assert.ok(a.every(Number.isFinite), `${bad} at ${at} ${JSON.stringify(d)}`);
+    assert.ok(identical(a, b), `${bad} at ${at} renders as a 0 sample`);
+  }
+});
+test('load() of a shorter (older) program fills the rest with the defaults (no stale values)', () => {
+  const fx = createFxDsp(SR);
+  fx.load(compile(sanitize({ v: 1, chain: [{ type: 'drive', bypass: false, dials: { curve: 1, tone: 30, mod_drive: 50, mod_tone: 20 } }] })), 0, true);
+  fx.load([1, 12, 0, 1, 0, 0.75, 0.35, 0, 0, 0, 0.5, 0.5, 0, 0], 0, true); // a 14-value (0.1.0) program
+  assert.deepEqual([fx.get(P.DRIVE_CURVE), fx.get(P.DRIVE_TONE), fx.get(P.DRIVE_MOD), fx.get(P.DRIVE_MOD_TONE)], [0, 100 / 99, 0, 0]);
 });
