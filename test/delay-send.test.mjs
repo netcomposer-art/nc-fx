@@ -104,3 +104,33 @@ test('Insert with tone / low cut / send: finite, and back to the ASTRID path whe
   } });
   assert.ok(o.every(Number.isFinite));
 });
+
+test('Accent -> send: no CV == a silent or short CV (bit-identical), and a NaN / Inf CV sample counts as 0', () => {
+  const n = 24000, x = sine(n);
+  for (const mode of [0, 1]) for (const send of [0, 40, 100]) for (const mod_send of [0, 60, -60]) {
+    const p = program({ mode, mix: 60, feedback: 50, send, mod_send, tone: 50, low_cut: 120 });
+    const none = run(p, x), silent = run(p, x, { mod: new Float32Array(n) });
+    assert.ok(identical(none, silent), `mode ${mode} send ${send} mod ${mod_send}`);
+    const fx = createFxDsp(SR); fx.setTempo(120, 0, true); fx.load(p, 0, true);
+    const o = new Float32Array(n), short = new Float32Array(64);
+    for (let k = 0; k < n; k += 128) fx.process(x.subarray(k, k + 128), x.subarray(k, k + 128), o.subarray(k, k + 128), new Float32Array(128), 128, k, short);
+    assert.ok(identical(none, o), 'short CV');
+  }
+  for (const bad of [NaN, Infinity, -Infinity]) {
+    const cv = new Float32Array(n).fill(0.4), ref = cv.slice(); cv[12805] = bad; ref[12805] = 0;
+    const p = program({ mode: 1, mix: 100, feedback: 60, send: 20, mod_send: 80, tone: 40 });
+    const a = run(p, x, { mod: cv }), b = run(p, x, { mod: ref });
+    assert.ok(a.every(Number.isFinite) && identical(a, b), String(bad));
+  }
+});
+
+test('load() of an older (14- or 18-value) program resets the newer dials to their defaults', () => {
+  const x = sine(24000), def = run(program({ mix: 40, feedback: 60 }), x);
+  for (const len of [14, 18]) {
+    const fx = createFxDsp(SR); fx.setTempo(120, 0, true);
+    fx.load(program({ mix: 40, feedback: 60, mode: 1, send: 30, tone: 20, low_cut: 300, mod_send: 50, beats_free: 0.3 }), 0, true);
+    fx.load(program({ mix: 40, feedback: 60 }).slice(0, len), 0, true);
+    for (const [k, v] of [[P.DELAY_TONE, 100 / 99], [P.DELAY_LOW_CUT, 0], [P.DELAY_MODE, 0], [P.DELAY_SEND, 1], [P.DELAY_MOD_SEND, 0], [P.DELAY_BEATS_FREE, 0]]) assert.equal(fx.get(k), v, `${len}: ${k}`);
+  }
+  assert.ok(def.every(Number.isFinite));
+});
