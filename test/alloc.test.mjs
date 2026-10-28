@@ -17,12 +17,12 @@ async function gcsDuring(fn) {
   return n;
 }
 
-for (const [limiter, bypassMode, withMod] of [[undefined, undefined], ['lookahead', 'hold'], ['soft', 'run'], ['off', 'hold'], ['lookahead', 'run', true]]) {
-  const label = (limiter ? `limiter ${limiter}, bypass ${bypassMode}` : 'default options') + (withMod ? ', mod input present' : '');
+for (const [limiter, bypassMode, withMod] of [[undefined, undefined], ['lookahead', 'hold'], ['soft', 'run'], ['off', 'hold'], ['lookahead', 'run', true], ['lookahead', 'run', 'acid']]) {
+  const label = (limiter ? `limiter ${limiter}, bypass ${bypassMode}` : 'default options') + (withMod === 'acid' ? ', Acid + tone + accent mod' : withMod ? ', mod input present' : '');
   test(`process() does not allocate (${label})`, async () => {
     const fx = createFxDsp(48000, limiter ? { limiter, bypassMode } : undefined);
     fx.setTempo(120, 0, true);
-    fx.load([1, 12, -3, 0.8, 1, 0.75, 0.5, 0.4, 1, 0.02, 0.6, 0.7, 0.3, 0.35], 0, true);
+    fx.load([1, 12, -3, 0.8, 1, 0.75, 0.5, 0.4, 1, 0.02, 0.6, 0.7, 0.3, 0.35].concat(withMod === 'acid' ? [1, 0.4, 0.7, 0.5] : []), 0, true);
     const inL = new Float32Array(128).map((_, i) => Math.sin(i)), inR = inL.slice();
     const oL = new Float32Array(128), oR = new Float32Array(128);
     const mod = withMod ? new Float32Array(128).map((_, i) => (i < 40 ? 0.8 : 0)) : null;
@@ -39,6 +39,13 @@ for (const [limiter, bypassMode, withMod] of [[undefined, undefined], ['lookahea
         f += 128;
       }
     };
+    // Collect the earlier tests' engines before warming up. Every engine's closures come from the same function
+    // literals in createFxDsp, so V8 gives them one shared feedback vector and optimised code. That code can embed the
+    // earlier engines' closures (inlined call targets) weakly; if they die in the gc() at the start of the measured
+    // window, the code deoptimises ('weak objects'), and until it is re-optimised the hot loop runs in baseline code,
+    // which boxes doubles. On a loaded runner that was enough for one scavenge (CI test(20), 'limiter soft, bypass
+    // run', ~9 of 16 runs under 16x local contention on main too; 0 of 32 with this gc()). The assertion is unchanged.
+    if (globalThis.gc) globalThis.gc();
     run(6000); // warm up: let the optimiser settle
     const gcs = await gcsDuring(() => run(30000)); // 80 s of audio
     assert.equal(gcs, 0, `${gcs} GCs while processing`);
@@ -65,7 +72,7 @@ test('hot path has no allocating syntax (static scan of the per-sample code)', (
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 const GATE = fileURLToPath(new URL('./bench/alloc-gate.mjs', import.meta.url));
-for (const scenario of ['steady', 'events', 'tempo', 'sparse', 'holdToggles', 'clearFade', 'modInput']) {
+for (const scenario of ['steady', 'events', 'tempo', 'sparse', 'holdToggles', 'clearFade', 'modInput', 'acidMod']) {
   test(`heap-delta gate: 0 B and 0 GCs (${scenario})`, () => {
     const out = execFileSync(process.execPath, ['--expose-gc', '--min-semi-space-size=64', '--max-semi-space-size=64', GATE, scenario],
       { encoding: 'utf8', env: { ...process.env, TRIES: '12' } });

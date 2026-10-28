@@ -73,7 +73,7 @@ The defaults change nothing you didn't ask for:
 | `preGain` | `1` | Unity gain before the limiter stage. |
 | `bypassMode` | `'run'` | A bypassed effect keeps running, so delay and reverb tails ring out when you bypass it and are still there when you turn it back on, as in ASTRID. `'hold'` opts in to zero CPU while bypassed, at the cost of dropping the tail. |
 | `maxDelaySeconds` | `4.9` | The longest delay (ASTRID's). The delay line is sized from it (about 0.4 MB per second at 48 kHz); up to 60. |
-| `modInput` | `false` | `true` adds `fx.modInput`: a mono input for a control signal (CV, e.g. Bass's accent), channel 0 of whatever you connect. Nothing is routed from it yet, so the sound is the same; per-target depth dials come next. |
+| `modInput` | `false` | `true` adds `fx.modInput`: a mono input for a control signal (CV, e.g. Bass's accent), channel 0 of whatever you connect. The drive's Accent → drive and Accent → tone dials set how much it moves; at 0 (the default) the sound is the same. |
 
 **CPU: use `'hold'` if you don't need tails across bypass.** With `'run'` a fully bypassed chain still costs nearly
 everything: in Petra's bench, 78 of 89 µs per 128-frame block. `'run'` is the default only because it is ASTRID's
@@ -110,7 +110,7 @@ Effects run in a fixed order. Each one has On/Off (bypass) and a mix:
 
 | Effect | Dials (UI units) | From ASTRID |
 |---|---|---|
-| **Drive** (`drive`) | Drive 0–24 dB (0 = clean), Output −12…+12 dB, Mix 0–100 % | `ncDrive*`: tanh with first-order ADAA, level-compensated |
+| **Drive** (`drive`) | Drive 0–24 dB (0 = clean; 0.1 dB steps in Acid), Output −12…+12 dB, Mix 0–100 %, Curve Smooth / Acid, Tone 0–100 (100 = off), Accent → drive and Accent → tone −100…+100 % | Smooth is `ncDrive*`: tanh with first-order ADAA, level-compensated. Acid is ASTRID-Bass's drive, bit-exact (below) |
 | **Delay** (`delay`) | Timing 1/16, 1/8, 1/8 dotted, 1/4, 1/4 dotted, 1/2 (tempo-synced, max 4.9 s); Feedback 0–90 %; Wet/dry (`mix`) 0–100 % | `ncDelay*`: a stereo tap with linear interpolation and an 80 ms glide on time changes |
 | **Reverb** (`plate`, alias `reverb`) | Pre-delay 0–200 ms, Size 0–100 (0.5×–1.5×), Decay, Damping, Mix 0–100 % | `ncPlate*`: Dattorro plate (JAES 1997) |
 | Limiter (fixed, last) | `limiter: 'off'` (default) · `'soft'` (zero latency, linear to −6 dBFS, then a soft knee toward −1 dBFS) · `'lookahead'` (−1 dB ceiling, 1.5 ms latency); `preGain` 1 (default; ASTRID 0.8) | `ncLimiter*` and the 0.8 pre-gain from `ncRender` |
@@ -160,9 +160,33 @@ samples exactly.
   averaged against that zero (DC 0.5 in gives one sample of 0.25). Switching the drive on is not affected: the
   bypass crossfade starts from fully dry.
 
+### Drive curves, tone and accent
+
+- **Curve.** `curve` 0 (Smooth, the default) is ASTRID's drive. `curve` 1 (Acid) is ASTRID-Bass's (3608858
+  `apps/bass/src/modules/fx/fx-dsp.ts`): `tanh(x·k) / tanh(k) · 0.9` with k = 10^(Drive/20), normalised to full scale
+  and not level-compensated, so it is louder than Smooth; no antialiasing. In Acid, Drive takes 0.1 dB steps (Bass's
+  0–1 amount is (k − 1)/9, and the 0.1 dB grid round-trips it within 0.0065); Smooth keeps whole dB, and switching
+  back to Smooth rounds Drive to whole dB.
+- **Tone** (both curves) is Bass's one-pole low-pass after the shaper, 500 Hz·2^(5·tone/99): 0 is 500 Hz, 99 is
+  16 kHz, 100 is off (no filter, the default). Smooth at 0 dB with no accent depth is the clean path and ignores tone.
+- **Accent → drive / tone** are the depths of mod routes 0 and 1 from `modInput` (or `process()`'s 7th argument).
+  Drive: Acid adds depth × CV to Bass's 0–1 amount per sample; Smooth adds depth × CV × 24 dB per sample (clamped to
+  0.01–24 dB). Tone: depth × CV is added to tone/99 at block rate, on absolute frames that are multiples of 128 (as
+  Bass reads `mod[0]` once per 128-frame block), so the output doesn't depend on the host's block size. Tone off with
+  a tone depth set filters from 16 kHz down.
+- **Bass parity.** With the converter's dials (INTEGRATION notes) and Bass's chain input (its voice × 0.8, as
+  float32), Acid's output equals Bass's drive output sample for sample (`test/bass-parity.test.mjs`: 240 settings
+  of amount, tone, mix and both accent depths, max abs diff 0; any block size). For that, the Acid path rounds its
+  output to float32 as Bass's buffers do (`Math.fround`, Acid only). Bass applies its 0.8 before the drive; nc-fx's
+  `preGain` is after the effects.
+- **Smooth choices (Zeta, 2026-10-28):** accent → drive is ±24 dB at full depth, and tone has no effect in Smooth at
+  0 dB with no accent depth (the clean path).
+- **Unchanged at the defaults.** Curve Smooth, tone off and both depths 0 run exactly the old code: the ASTRID parity
+  tests are bit-identical.
+
 **Coming next** (a later PR, from the rest of ASTRID's chain): low-, high- and band-pass filters, a 3-band EQ,
-compressor, width, flanger, chorus and phaser. Also planned: user-reorderable slots, an accent modulation bus,
-a delay send, drive tone, and a wet low-cut.
+compressor, width, flanger, chorus and phaser. Also planned: user-reorderable slots, a delay send (with its accent
+depth) and a wet low-cut.
 
 ## API
 
@@ -232,7 +256,8 @@ fx.process(inL, inR, outL, outR, 128, currentFrame);        // allocation-free
 
 An optional 7th argument passes the block's control signal, the same as the node's `modInput`:
 `fx.process(inL, inR, outL, outR, 128, currentFrame, modChannel)`. It needs at least `frames` samples; null or a
-shorter buffer means no mod. Nothing is routed from it yet.
+shorter buffer is read as a silent CV (all zeros), so it sounds exactly like a connected but silent input. A NaN or
+infinite CV sample counts as 0. The depths are the drive's `mod_drive` / `mod_tone` dials (indexes 16, 17).
 
 `set`, `setTempo` and `clear(frame?, fadeMs?)` are allocation-free too and return `false` for a frame more than
 600 s ahead. Pass `startFrame: currentFrame` in the options if the engine is created mid-stream. `load()` skips
@@ -244,7 +269,7 @@ values equal to the ones already scheduled (unless `snap`).
   `EFFECT_ORDER`, `loadFxWorklet(ctx, url?)` and `PROCESSOR_NAME` (`'nc-fx@1'`).
 - `compile(state) → Float64Array` and `dialToDsp(type, key, value)`, for hosts that run the engine themselves.
 - `describeParams()`: every control as plain JSON, `{effect, key, label, index, unit, min, max, step, default,
-  curve, control: 'knob'|'select'|'toggle', tempoSynced, options?}`, for host UIs and automation. Readouts are kept
+  curve, control: 'knob'|'select'|'toggle', tempoSynced, options?, stepWhen?}`, for host UIs and automation (`stepWhen`: drive_db is 0.1 dB while curve is 1). Readouts are kept
   apart, as functions, in `FORMATS['delay.delay_beats'](value, bpm)`.
 - From `@netcomposer/nc-fx/tempo`, all duck-typed so nc-clock isn't a dependency:
   `followClock(fx, clock, {mapper? | toAudioTime?, now?})`, `applyTempoMap(fx, map, {fromBeat, toBeat, toAudioTime})`

@@ -6,7 +6,8 @@ import { FX_PARAM, FX_NPARAMS } from '../src/dsp.js';
 test('three effects in the fixed order with ASTRID\'s dials and ranges', () => {
   assert.deepEqual(EFFECTS.map((e) => e.type), ['drive', 'delay', 'plate']);
   const want = {
-    drive: [['drive_db', 0, 24, 0], ['output_db', -12, 12, 0], ['mix', 0, 100, 100]],
+    drive: [['drive_db', 0, 24, 0], ['output_db', -12, 12, 0], ['mix', 0, 100, 100],
+      ['curve', 0, 1, 0], ['tone', 0, 100, 100], ['mod_drive', -100, 100, 0], ['mod_tone', -100, 100, 0]],
     delay: [['delay_beats', 0.25, 2, 0.75], ['feedback', 0, 90, 35], ['mix', 0, 100, 0]],
     plate: [['predelay', 0, 200, 0], ['size', 0, 100, 50], ['decay', 0, 100, 50], ['damping', 0, 100, 0], ['mix', 0, 100, 0]],
   };
@@ -53,13 +54,14 @@ test('every engine index is driven by exactly one dial', () => {
   for (const t of Object.keys(PARAM_INDEX)) for (const i of Object.values(PARAM_INDEX[t])) { assert.ok(!seen.has(i)); seen.add(i); }
   assert.equal(seen.size, FX_NPARAMS);
   assert.equal(NPARAMS, FX_NPARAMS);
-  const names = { drive: ['DRIVE_ON', 'DRIVE_DB', 'DRIVE_OUT_DB', 'DRIVE_MIX'], delay: ['DELAY_ON', 'DELAY_BEATS', 'DELAY_FEEDBACK', 'DELAY_MIX'], plate: ['PLATE_ON', 'PLATE_PREDELAY', 'PLATE_SIZE', 'PLATE_DECAY', 'PLATE_DAMPING', 'PLATE_MIX'] };
+  const names = { drive: ['DRIVE_ON', 'DRIVE_DB', 'DRIVE_OUT_DB', 'DRIVE_MIX', 'DRIVE_CURVE', 'DRIVE_TONE', 'DRIVE_MOD', 'DRIVE_MOD_TONE'], delay: ['DELAY_ON', 'DELAY_BEATS', 'DELAY_FEEDBACK', 'DELAY_MIX'], plate: ['PLATE_ON', 'PLATE_PREDELAY', 'PLATE_SIZE', 'PLATE_DECAY', 'PLATE_DAMPING', 'PLATE_MIX'] };
   for (const t of Object.keys(names)) assert.deepEqual(Object.values(PARAM_INDEX[t]), names[t].map((n) => FX_PARAM[n]));
   const p = compile(defaultState());
   assert.equal(p.length, FX_NPARAMS);
   assert.equal(p[FX_PARAM.DRIVE_ON], 0);
   assert.equal(p[FX_PARAM.DRIVE_MIX], 1);
   assert.equal(p[FX_PARAM.DELAY_BEATS], 0.75);
+  assert.deepEqual([p[FX_PARAM.DRIVE_CURVE], p[FX_PARAM.DRIVE_TONE], p[FX_PARAM.DRIVE_MOD], p[FX_PARAM.DRIVE_MOD_TONE]], [0, 100 / 99, 0, 0]);
 });
 
 test('state is JSON and round-trips exactly', () => {

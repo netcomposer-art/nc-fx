@@ -6,7 +6,7 @@
 // from a lazily imported string turned into a Blob URL. The panel (./ui.js) is only imported by mount().
 
 import {
-  EFFECTS, EFFECT_ORDER, STATE_VERSION, effectType, dialDef, clampDial, dialToDsp, PARAM_INDEX,
+  EFFECTS, EFFECT_ORDER, STATE_VERSION, effectType, effectDef, dialDef, clampDial, dialStep, dialToDsp, PARAM_INDEX,
   sanitize, migrate, compile, cloneState, defaultState, delaySeconds, describeParams, FORMATS
 } from './params.js';
 
@@ -165,11 +165,20 @@ export function createFxCore(ctx, opts) {
       else {
         var d = dialDef(type, key);
         if (!d) return undefined;
-        v = clampDial(d, value);
+        v = clampDial(d, value, dialStep(d, slot.dials));
       }
       if (key === 'bypass') slot.bypass = v; else slot.dials[key] = v;
       post({ t: 'p', i: PARAM_INDEX[type][key], v: dialToDsp(type, key, v), when: whenOf(at) });
       emit({ effect: type, key: key, value: v });
+      // A dial whose step depends on this one (drive_db: 0.1 dB in Acid, whole dB in Smooth) is re-rounded.
+      effectDef(type).dials.forEach(function (dd) {
+        if (!dd.stepWhen || !dd.stepWhen.some(function (w) { return w.key === key; })) return;
+        var was = slot.dials[dd.key], now = clampDial(dd, was, dialStep(dd, slot.dials));
+        if (now === was) return;
+        slot.dials[dd.key] = now;
+        post({ t: 'p', i: PARAM_INDEX[type][dd.key], v: dialToDsp(type, dd.key, now), when: whenOf(at) });
+        emit({ effect: type, key: dd.key, value: now });
+      });
       return v;
     },
     getParam: function (effect, key) {
