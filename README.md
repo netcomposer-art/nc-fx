@@ -73,7 +73,7 @@ The defaults change nothing you didn't ask for:
 | `preGain` | `1` | Unity gain before the limiter stage. |
 | `bypassMode` | `'run'` | A bypassed effect keeps running, so delay and reverb tails ring out when you bypass it and are still there when you turn it back on, as in ASTRID. `'hold'` opts in to zero CPU while bypassed, at the cost of dropping the tail. |
 | `maxDelaySeconds` | `4.9` | The longest delay (ASTRID's). The delay line is sized from it (about 0.4 MB per second at 48 kHz); up to 60. |
-| `modInput` | `false` | `true` adds `fx.modInput`: a mono input for a control signal (CV, e.g. Bass's accent), channel 0 of whatever you connect. The drive's Accent → drive and Accent → tone dials set how much it moves; at 0 (the default) the sound is the same. |
+| `modInput` | `false` | `true` adds `fx.modInput`: a mono input for a control signal (CV, e.g. Bass's accent), channel 0 of whatever you connect (it is `'discrete'`, so a stereo source keeps only its channel 0; see [Mod input wiring](#mod-input-wiring)). The drive's Accent → drive / tone and the delay's Accent → send dials set how much it moves; at 0 (the default) the sound is the same, and so is a connected-but-silent (or never-connected) input. |
 
 **CPU: use `'hold'` if you don't need tails across bypass.** With `'run'` a fully bypassed chain still costs nearly
 everything: in Petra's bench, 78 of 89 µs per 128-frame block. `'run'` is the default only because it is ASTRID's
@@ -252,7 +252,20 @@ fx.process(inL, inR, outL, outR, 128, currentFrame);        // allocation-free
 
 An optional 7th argument passes the block's control signal, the same as the node's `modInput`:
 `fx.process(inL, inR, outL, outR, 128, currentFrame, modChannel)`. It needs at least `frames` samples; null or a
-shorter buffer means no mod. The depths are the drive's `mod_drive` / `mod_tone` dials (indexes 16, 17).
+shorter buffer means no mod. The depths are the drive's `mod_drive` / `mod_tone` dials (indexes 16, 17) and the delay's `mod_send` (22).
+
+#### Mod input wiring
+
+`fx.modInput` is mono and `'discrete'`: it takes channel 0 of what you connect and drops the rest. To use another
+channel of a stereo (or multichannel) source, split it and connect that output:
+
+```js
+const split = ctx.createChannelSplitter(2);
+cvSource.connect(split);
+split.connect(fx.modInput, 1); // channel 1 of cvSource -> the mod signal
+```
+
+A never-connected `fx.modInput` feeds silence, which sounds the same as no mod at any depth.
 
 `set`, `setTempo` and `clear(frame?, fadeMs?)` are allocation-free too and return `false` for a frame more than
 600 s ahead. Pass `startFrame: currentFrame` in the options if the engine is created mid-stream. `load()` skips
