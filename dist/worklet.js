@@ -742,7 +742,10 @@ class NcFxProcessor extends AudioWorkletProcessor {
     var inp = inputs[0];
     var inL = inp && inp.length > 0 ? inp[0] : null;
     var inR = inp && inp.length > 1 ? inp[1] : null;
-    this.dsp.process(inL, inR, out[0], out.length > 1 ? out[1] : null, out[0].length, currentFrame);
+    // Input 1 is the mod input (createFxCore({ modInput: true })): its channel 0, or null when absent or unconnected.
+    var mi = inputs.length > 1 ? inputs[1] : null;
+    var mod = mi && mi.length > 0 ? mi[0] : null;
+    this.dsp.process(inL, inR, out[0], out.length > 1 ? out[1] : null, out[0].length, currentFrame, mod);
     return true;
   }
 }
