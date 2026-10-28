@@ -57,3 +57,31 @@ for (const [bypassMode, withMod] of [['run'], ['hold'], ['run', true], ['run', '
     assert.ok(late <= 1.4, `µs/block vs a zeroed control, per 5 s: ${ratios.map((x) => x.toFixed(2)).join(' ')}`);
   });
 }
+
+// Zeta's PR C review (P3): a Send tail with feedback > 0.5 and the filters off stuck in float32 subnormals on the line
+// (x * fb rounds back up to the smallest subnormal), 5.6e-45 after 90 s. Both modes, filters off, long feedback tails
+// (1/32 at 240 bpm, so hundreds of repeats fit): the output must reach exactly 0. Subnormal output samples are allowed
+// only at the tail's very end, once its peak is below 1e-30 (near-zero samples of a tail that small, and the fractional read of the last line values, as in Bass;
+// Chrome flushes them). Before the fix the Send tail sat at 5.6e-45 for good.
+for (const mode of [0, 1]) for (const fb of [0.6, 0.9]) {
+  test(`delay tail with the filters off reaches exact 0, no subnormals (${mode ? 'Send' : 'Insert'}, feedback ${fb})`, () => {
+    const fx = createFxDsp(48000, { limiter: 'off', bypassMode: 'hold' });
+    fx.setTempo(240, 0, true);
+    // drive, plate bypassed; delay on, 1/32, mix 100 % (Send) / 50 % (Insert), filters off, send 100, no mod
+    fx.load([0, 0, 0, 1, 1, 0.125, fb, mode ? 1 : 0.5, 0, 0, 0.5, 0.5, 0, 0, 0, 100 / 99, 0, 0, 100 / 99, 0, mode, 1, 0, 0], 0, true);
+    const b = new Float32Array(128);
+    let f = 0, lastNonZero = -1, firstSub = -1, firstTiny = -1;
+    for (let k = 0; k < 375 * 40; k++) { // 40 s
+      if (k < 40) for (let i = 0; i < 128; i++) b[i] = Math.sin((f + i) * 0.05) * 0.5; else b.fill(0);
+      fx.process(b, null, b, null, 128, f); f += 128;
+      let pk = 0;
+      for (let i = 0; i < 128; i++) if (b[i] !== 0) {
+        pk = Math.max(pk, Math.abs(b[i])); lastNonZero = k; if (firstSub < 0 && Math.abs(b[i]) < 1.1754943508222875e-38) firstSub = k;
+      }
+      if (k > 40 && firstTiny < 0 && pk < 1e-30) firstTiny = k;
+    }
+    if (mode === 0) assert.equal(firstSub, -1, 'Insert: no subnormal output samples');
+    else assert.ok(firstSub < 0 || (firstTiny >= 0 && firstSub >= firstTiny), `first subnormal output at block ${firstSub}, tail under 1e-30 at ${firstTiny}`);
+    assert.ok(lastNonZero < 375 * 35, `tail still non-zero at block ${lastNonZero} of ${375 * 40}`);
+  });
+}

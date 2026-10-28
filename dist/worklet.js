@@ -98,6 +98,8 @@ var HORIZON_S = 600; // events further ahead than this are refused
 // Drive tone LP state flushes to 0 below this: far above subnormal doubles (2.2e-308), far below anything a float32
 // output can show (1.4e-45), so it keeps subnormals out and every output sample equal to Bass's (which never flushes).
 var LP_FLUSH = 1e-200;
+var F32_MIN = 1.1754943508222875e-38; // smallest normal float32 (2^-126): the Send line flushes writes below it
+var ZCV_FRAMES = 4096; // the zero-CV buffer's preallocated size, frames (see zeroCv)
 var MOD_GRID = 128; // block-rate mod (drive tone) updates on absolute frames that are multiples of this, like Bass's mod[0]
 // Dattorro's line lengths at FS (0 is the pre-delay, sized separately).
 var PLATE_PAPER = [0, 142, 107, 379, 277, 672, 908, 4453, 4217, 1800, 2656, 3720, 3163];
@@ -144,8 +146,11 @@ function createFxDsp(sampleRate, opts) {
   var DR = new Float64Array(24); // 0 u0, 1 u1, 2 f0, 3 f1, 4 driveS, 5 driveT, 6 outS, 7 outT, 8 mixS, 9 mixT, 10 on, 11 onT
   DR[8] = 1; DR[9] = 1; DR[13] = 100 / 99; DR[22] = 1; DR[20] = -1;
   var modBuf = null; // this block's mod signal while a depth is set: the CV, or ZCV (silence) when there is none
-  var ZCV = new Float32Array(MOD_GRID); // zero CV: no CV sounds exactly like a silent one (Zeta, PR B P2-a)
-  function zeroCv(n) { if (ZCV.length < n) ZCV = new Float32Array(n); return ZCV; } // grows once per larger block size
+  // Zero CV: no CV sounds exactly like a silent one (Zeta, PR B P2-a). Preallocated for blocks up to ZCV_FRAMES (16 KB),
+  // so no block size a worklet or an offline render uses allocates; a larger block grows it once per new largest size
+  // (Zeta, PR C review P3).
+  var ZCV = new Float32Array(ZCV_FRAMES);
+  function zeroCv(n) { if (ZCV.length < n) ZCV = new Float32Array(n); return ZCV; }
   toneCoef(); // the coefficient for tone 1.0, so a tone switched on between grid frames starts from a real filter
 
   // ---- Delay (ncDelay*: one stereo tap, linear interpolation, equal-power wet/dry)
@@ -599,9 +604,15 @@ function createFxDsp(sampleRate, opts) {
       dL = (dBufL[j0] + (dBufL[j1] - dBufL[j0]) * fr) * tg;
       dR = (dBufR[j0] + (dBufR[j1] - dBufR[j0]) * fr) * tg;
       if (filt) { DT[0] = dL; DT[1] = dR; delayFilters(); dL = DT[0]; dR = DT[1]; } // through DT: no double crosses a call
-      // The line is float32 (as Bass's); no 1e-15 flush here, the float32 store ends a tail at its own floor.
-      dBufL[w] = xL * tg * amt + dL * fb;
-      dBufR[w] = xR * tg * amt + dR * fb;
+      // The line is float32 (as Bass's). Writes below float32's normal range (|v| < 2^-126, about -759 dBFS) are
+      // flushed to 0: with fb > 0.5 a float32 subnormal times fb rounds back up to itself, so the tail never ended
+      // (Zeta, PR C review). Bass doesn't flush, but a write that small reads back as at most a subnormal output
+      // sample, and the parity tests stay bit-exact. No 1e-15 flush (that would break Bass parity). Outputs are not
+      // flushed (like the Acid drive's): the fractional read at a tail's very end can still give a few subnormal
+      // output samples, as in Bass; Chrome's audio thread flushes those (FTZ).
+      var vL = xL * tg * amt + dL * fb, vR = xR * tg * amt + dR * fb;
+      dBufL[w] = vL > -F32_MIN && vL < F32_MIN ? 0 : vL;
+      dBufR[w] = vR > -F32_MIN && vR < F32_MIN ? 0 : vR;
       var m = DL[5];
       oL = Math.fround(xL + dL * m); oR = Math.fround(xR + dR * m); // Bass's output buffer is float32
     } else {

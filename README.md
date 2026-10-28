@@ -166,6 +166,8 @@ samples exactly.
 - **Tone** (both curves) is Bass's one-pole low-pass after the shaper, 500 Hz·2^(5·tone/99): 0 is 500 Hz, 99 is
   16 kHz, 100 is off (no filter, the default). Smooth at 0 dB with no accent depth is the clean path and ignores tone.
 - **Accent → drive / tone** are the depths of mod routes 0 and 1 from `modInput` (or `process()`'s 7th argument).
+  With a depth set and no CV, the engine reads a preallocated silent CV (4096 frames, 16 KB); only a block larger
+  than that allocates, once per new largest size.
   Drive: Acid adds depth × CV to Bass's 0–1 amount per sample; Smooth adds depth × CV × 24 dB per sample (clamped to
   0.01–24 dB). Tone: depth × CV is added to tone/99 at block rate, on absolute frames that are multiples of 128 (as
   Bass reads `mod[0]` once per 128-frame block), so the output doesn't depend on the host's block size. Tone off with
@@ -200,6 +202,11 @@ Delay (indexes 18–23, all off / ASTRID at their defaults):
   to float32. Once the write position wraps, the read adds the line length before taking the fraction, so only equal line
   lengths guarantee exactness past 4 s (`maxDelaySeconds: 191991.5 / 48000` matches Bass's 4 s line at 48 kHz). The
   6 s probe is exact with that and also with the default 4.9 s line; the test allows < 1e-6 for the default.
+  One deliberate difference: Send flushes a line write below float32's normal range (|v| < 2^-126 ≈ 1.18e-38) to 0.
+  Bass doesn't, and with feedback above 0.5 and the filters off its tail sits at the smallest subnormal for good
+  (x · fb rounds back up to it); here it ends. The parity tests are unaffected (still max abs diff 0). Outputs are not
+  flushed, so a tail's last fractional reads can give a few subnormal samples, as in Bass; Chrome's audio thread
+  flushes those to 0 anyway.
 
 **Coming next** (a later PR, from the rest of ASTRID's chain): low-, high- and band-pass filters, a 3-band EQ,
 compressor, width, flanger, chorus and phaser. Also planned: user-reorderable slots.
