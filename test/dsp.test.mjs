@@ -137,7 +137,7 @@ test('clear() drops every tail; get() reports applied values; bad values are ign
   fx.set(P.DELAY_FEEDBACK, 5); assert.equal(fx.get(P.DELAY_FEEDBACK), 0.9);
   fx.set(P.DELAY_FEEDBACK, NaN); assert.equal(fx.get(P.DELAY_FEEDBACK), 0.9);
   fx.set(99, 1); fx.set(-5, 1);
-  assert.equal(FX_NPARAMS, 18);
+  assert.equal(FX_NPARAMS, 24);
 });
 
 // ---- Review fixes (Zeta, Petra)

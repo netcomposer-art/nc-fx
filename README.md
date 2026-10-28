@@ -73,7 +73,7 @@ The defaults change nothing you didn't ask for:
 | `preGain` | `1` | Unity gain before the limiter stage. |
 | `bypassMode` | `'run'` | A bypassed effect keeps running, so delay and reverb tails ring out when you bypass it and are still there when you turn it back on, as in ASTRID. `'hold'` opts in to zero CPU while bypassed, at the cost of dropping the tail. |
 | `maxDelaySeconds` | `4.9` | The longest delay (ASTRID's). The delay line is sized from it (about 0.4 MB per second at 48 kHz); up to 60. |
-| `modInput` | `false` | `true` adds `fx.modInput`: a mono input for a control signal (CV, e.g. Bass's accent), channel 0 of whatever you connect. The drive's Accent → drive and Accent → tone dials set how much it moves; at 0 (the default) the sound is the same. |
+| `modInput` | `false` | `true` adds `fx.modInput`: a mono input for a control signal (CV, e.g. Bass's accent), channel 0 of whatever you connect (it is `'discrete'`, so a stereo source keeps only its channel 0; see [Mod input wiring](#mod-input-wiring)). The drive's Accent → drive / tone and the delay's Accent → send dials set how much it moves; at 0 (the default) the sound is the same, and so is a connected-but-silent (or never-connected) input. |
 
 **CPU: use `'hold'` if you don't need tails across bypass.** With `'run'` a fully bypassed chain still costs nearly
 everything: in Petra's bench, 78 of 89 µs per 128-frame block. `'run'` is the default only because it is ASTRID's
@@ -111,7 +111,7 @@ Effects run in a fixed order. Each one has On/Off (bypass) and a mix:
 | Effect | Dials (UI units) | From ASTRID |
 |---|---|---|
 | **Drive** (`drive`) | Drive 0–24 dB (0 = clean; 0.1 dB steps in Acid), Output −12…+12 dB, Mix 0–100 %, Curve Smooth / Acid, Tone 0–100 (100 = off), Accent → drive and Accent → tone −100…+100 % | Smooth is `ncDrive*`: tanh with first-order ADAA, level-compensated. Acid is ASTRID-Bass's drive, bit-exact (below) |
-| **Delay** (`delay`) | Timing 1/16, 1/8, 1/8 dotted, 1/4, 1/4 dotted, 1/2 (tempo-synced, max 4.9 s); Feedback 0–90 %; Wet/dry (`mix`) 0–100 % | `ncDelay*`: a stereo tap with linear interpolation and an 80 ms glide on time changes |
+| **Delay** (`delay`) | Timing 1/32, 1/16, 1/8, 1/8 dotted, 1/4, 1/4 dotted, 1/2 (tempo-synced, max 4.9 s); Feedback 0–90 %; Wet/dry (`mix`) 0–100 %; Tone 0–100 (100 = off); Low cut 0–1000 Hz (0 = off); Mode Insert / Send; Send 0–100 %; Accent → send −100…+100 %; Free time 0–2 beats (0 = off) | `ncDelay*`: a stereo tap with linear interpolation and an 80 ms glide on time changes. Send mode is ASTRID-Bass's delay, bit-exact (below) |
 | **Reverb** (`plate`, alias `reverb`) | Pre-delay 0–200 ms, Size 0–100 (0.5×–1.5×), Decay, Damping, Mix 0–100 % | `ncPlate*`: Dattorro plate (JAES 1997) |
 | Limiter (fixed, last) | `limiter: 'off'` (default) · `'soft'` (zero latency, linear to −6 dBFS, then a soft knee toward −1 dBFS) · `'lookahead'` (−1 dB ceiling, 1.5 ms latency); `preGain` 1 (default; ASTRID 0.8) | `ncLimiter*` and the 0.8 pre-gain from `ncRender` |
 
@@ -184,9 +184,29 @@ samples exactly.
 - **Unchanged at the defaults.** Curve Smooth, tone off and both depths 0 run exactly the old code: the ASTRID parity
   tests are bit-identical.
 
+Delay (indexes 18–23, all off / ASTRID at their defaults):
+
+- **Tone and Low cut** filter the tap inside the feedback loop, so each repeat is darker / thinner (Bass's laws:
+  low-pass 800 Hz·2^(4·tone/99), 99 = 12.8 kHz; high-pass at the cut in Hz). They update at block rate on the
+  absolute 128-frame grid, as Bass smooths per block. Low cut off fades its state out instead of stepping.
+- **Mode.** Insert (default) is ASTRID's equal-power wet/dry. Send is Bass's: dry + mix × wet, so mix 100 is Bass's
+  full return. Switching crossfades over 20 ms.
+- **Send** (default 100) is how much dry goes into the line; **Accent → send** adds depth × CV per sample (mod route
+  2), clamped to 0–100 %.
+- **Free time** (`beats_free`): 0 is off and the Timing select plays. Any other value (0.125–2 beats, kept exactly as
+  given) overrides the select, through the same 80 ms glide, and without ASTRID's 0.1 ms rounding of the delay time.
+  The panel shows it as a free value ("free 0.3 beats · 144 ms") and dims Timing ("free time"). Tempo changes glide
+  as before.
+- **Bass parity (delay).** In Send mode, with the converter's dials, the output equals Bass's delay output sample for
+  sample (`test/bass-delay-parity.test.mjs`: tone × low cut, send × accent depth × feedback × division, free
+  divisions including 0.75 at 120/125/150 bpm, any block size, and Acid → delay as a chain; max abs diff 0). For
+  that, Send reads the line as Bass does (`rp = w − d`, `a + (b − a)·frac`), keeps it float32 and rounds its output
+  to float32. Once the write position wraps, the read adds the line length before taking the fraction, so only equal line
+  lengths guarantee exactness past 4 s (`maxDelaySeconds: 191991.5 / 48000` matches Bass's 4 s line at 48 kHz). The
+  6 s probe is exact with that and also with the default 4.9 s line; the test allows < 1e-6 for the default.
+
 **Coming next** (a later PR, from the rest of ASTRID's chain): low-, high- and band-pass filters, a 3-band EQ,
-compressor, width, flanger, chorus and phaser. Also planned: user-reorderable slots, a delay send (with its accent
-depth) and a wet low-cut.
+compressor, width, flanger, chorus and phaser. Also planned: user-reorderable slots.
 
 ## API
 
@@ -257,7 +277,21 @@ fx.process(inL, inR, outL, outR, 128, currentFrame);        // allocation-free
 An optional 7th argument passes the block's control signal, the same as the node's `modInput`:
 `fx.process(inL, inR, outL, outR, 128, currentFrame, modChannel)`. It needs at least `frames` samples; null or a
 shorter buffer is read as a silent CV (all zeros), so it sounds exactly like a connected but silent input. A NaN or
-infinite CV sample counts as 0. The depths are the drive's `mod_drive` / `mod_tone` dials (indexes 16, 17).
+infinite CV sample counts as 0. The depths are the drive's `mod_drive` / `mod_tone` dials (indexes 16, 17) and the
+delay's `mod_send` (22).
+
+#### Mod input wiring
+
+`fx.modInput` is mono and `'discrete'`: it takes channel 0 of what you connect and drops the rest. To use another
+channel of a stereo (or multichannel) source, split it and connect that output:
+
+```js
+const split = ctx.createChannelSplitter(2);
+cvSource.connect(split);
+split.connect(fx.modInput, 1); // channel 1 of cvSource -> the mod signal
+```
+
+A never-connected `fx.modInput` feeds silence, which sounds the same as no mod at any depth.
 
 `set`, `setTempo` and `clear(frame?, fadeMs?)` are allocation-free too and return `false` for a frame more than
 600 s ahead. Pass `startFrame: currentFrame` in the options if the engine is created mid-stream. `load()` skips

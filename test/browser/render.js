@@ -85,6 +85,24 @@ async function main() {
     const noCv = await render(acid, { modInput: true });
     check('Acid accent depths move the sound only with a CV connected', rms(w.L, noCv.L) > 1e-3, rms(w.L, noCv.L).toFixed(4));
   }
+  // PR C: Send delay + tone + low cut + free time + Accent -> send in the real worklet == the engine here.
+  {
+    const cvBuf = new Float32Array(N);
+    for (let i = 0; i < N; i++) cvBuf[i] = (i % 6000) < 1500 ? Math.exp(-(i % 6000) / 500) : 0;
+    const send = (s) => { s.chain[1].bypass = false; Object.assign(s.chain[1].dials, { mode: 1, mix: 100, feedback: 60, send: 30, mod_send: 70, tone: 50, low_cut: 120, beats_free: 0.3 }); };
+    const connectCv = (ctx, fx) => { const b = ctx.createBuffer(1, N, SR); b.copyToChannel(cvBuf, 0); const s = ctx.createBufferSource(); s.buffer = b; s.connect(fx.modInput); s.start(0); };
+    const w = await render(send, { modInput: true }, connectCv);
+    const st = defaultState(); send(st);
+    const eng = createFxDsp(SR); eng.setTempo(120, 0, true); eng.load(compile(st), 0, true);
+    const eL = new Float32Array(N), eR = new Float32Array(N);
+    for (let o = 0; o < N; o += 128) eng.process(inL.subarray(o, o + 128), inR.subarray(o, o + 128), eL.subarray(o, o + 128), eR.subarray(o, o + 128), 128, o, cvBuf.subarray(o, o + 128));
+    const TINY = 1.1754943508222875e-38, ftz = (v) => (Math.abs(v) < TINY ? 0 : v);
+    const sameFtz = (x, y) => x.every((v, i) => ftz(v) === ftz(y[i]));
+    check('Send delay + tone + low cut + free time + send mod: worklet output == engine output (float32 subnormals as 0)', w.status === 'ready' && sameFtz(w.L, eL) && sameFtz(w.R, eR), String(rms(w.L, eL)));
+    // Zeta P3 (PR A): a never-connected modInput feeds silence, which renders as no mod even with depths set.
+    const idle = await render(send, { modInput: true }), none = await render(send);
+    check('never-connected modInput with nonzero depths == no mod input (bit-identical)', idle.status === 'ready' && same(idle.L, none.L) && same(idle.R, none.R));
+  }
   // Timed change on the audio clock: delay mix scheduled at 0.5 s.
   {
     const ctx = new OfflineAudioContext(2, N, SR);
@@ -147,6 +165,16 @@ async function main() {
     check('delay readout shows ms at the tempo', document.querySelector('[data-testid="nc-fx-delay"] output').textContent === '375 ms');
     fx.setTempo(90);
     check('readout follows the tempo', document.querySelector('[data-testid="nc-fx-delay"] output').textContent === '500 ms');
+    const freeSl = document.querySelector('[data-testid="nc-fx-delay-beats_free"]'), freeRow = freeSl.parentNode, timRow = document.querySelector('[data-testid="nc-fx-delay-delay_beats"]').parentNode;
+    const off0 = freeRow.querySelector('output').textContent, ov0 = timRow.hasAttribute('data-overridden');
+    freeSl.value = '0.3'; freeSl.dispatchEvent(new Event('input'));
+    check('panel: Free time reads off, then "free 0.3 beats · 200 ms" (at 90 bpm), marked free; Timing marked overridden',
+      off0 === 'off' && !ov0 && freeSl.step === '0.001' && fx.getParam('delay', 'beats_free') === 0.3 && freeRow.querySelector('output').textContent === 'free 0.3 beats \u00b7 200 ms'
+      && freeRow.hasAttribute('data-free') && timRow.hasAttribute('data-overridden') && timRow.querySelector('output').textContent === 'free time',
+      [off0, freeRow.querySelector('output').textContent, timRow.querySelector('output').textContent]);
+    fx.setParam('delay', 'beats_free', 0);
+    check('panel: Free time off gives the Timing select back', !timRow.hasAttribute('data-overridden') && timRow.querySelector('output').textContent === '500 ms' && !freeRow.hasAttribute('data-free'));
+    check('panel: delay Mode select and 1/32 option', document.querySelector('[data-testid="nc-fx-delay-mode"]').tagName === 'SELECT' && [...document.querySelector('[data-testid="nc-fx-delay-delay_beats"]').options].some((o) => o.textContent === '1/32'));
     panel.destroy();
     check('destroy removes the panel', !document.querySelector('.nc-fx'));
     // dispose() while mount() is still loading the panel: nothing is left in the page or listening.

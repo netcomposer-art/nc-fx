@@ -13,6 +13,13 @@ export interface FxDialDef {
   options?: ReadonlyArray<{ value: number; label: string }>;
   /** A finer step while another dial of the same effect has a value: drive_db is 0.1 dB when curve is 1 (Acid). */
   stepWhen?: ReadonlyArray<{ key: string; value: number; step: number }>;
+  /** delay.low_cut: 'log' (a UI hint). */
+  curve?: 'log';
+  /** delay.delay_beats: overridden while this dial (beats_free) is non-zero. */
+  overriddenBy?: string;
+  /** delay.beats_free: kept as given (no step rounding); 0 = off, else clamped to minOn..max. */
+  exact?: true;
+  minOn?: number;
   /** Readout text. bpm matters for the delay's Timing (shown in ms). */
   format(value: number, bpm?: number): string;
 }
@@ -47,11 +54,15 @@ export function cloneState(s: FxState): FxState;
 export function dialToDsp(type: FxEffectType, key: string, value: number | boolean): number;
 export function compile(state: unknown, into?: Float64Array): Float64Array;
 export interface FxParamInfo {
-  effect: FxEffectType; key: string; label: string; index: number; unit: 'dB' | '%' | 'beats' | 'ms' | null;
-  min: number; max: number; step: number | null; default: number | boolean; curve: 'linear' | 'stepped';
+  effect: FxEffectType; key: string; label: string; index: number; unit: 'dB' | '%' | 'beats' | 'ms' | 'Hz' | null;
+  min: number; max: number; step: number | null; default: number | boolean; curve: 'linear' | 'stepped' | 'log';
   control: 'knob' | 'select' | 'toggle'; tempoSynced: boolean; options?: Array<{ value: number; label: string }>;
   /** drive.drive_db: [{ key: 'curve', value: 1, step: 0.1 }] (0.1 dB in Acid; whole dB in Smooth). */
   stepWhen?: Array<{ key: string; value: number; step: number }>;
+  /** delay.delay_beats: 'beats_free' (the select is overridden while it is non-zero). */
+  overriddenBy?: string;
+  /** delay.beats_free: 0 is off; otherwise values are at least minOn (0.125). */
+  offValue?: 0; minOn?: number;
 }
 /** Every control as plain JSON (no functions). */
 export function describeParams(): FxParamInfo[];

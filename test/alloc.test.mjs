@@ -17,12 +17,12 @@ async function gcsDuring(fn) {
   return n;
 }
 
-for (const [limiter, bypassMode, withMod] of [[undefined, undefined], ['lookahead', 'hold'], ['soft', 'run'], ['off', 'hold'], ['lookahead', 'run', true], ['lookahead', 'run', 'acid']]) {
-  const label = (limiter ? `limiter ${limiter}, bypass ${bypassMode}` : 'default options') + (withMod === 'acid' ? ', Acid + tone + accent mod' : withMod ? ', mod input present' : '');
+for (const [limiter, bypassMode, withMod] of [[undefined, undefined], ['lookahead', 'hold'], ['soft', 'run'], ['off', 'hold'], ['lookahead', 'run', true], ['lookahead', 'run', 'acid'], ['soft', 'run', 'delay']]) {
+  const label = (limiter ? `limiter ${limiter}, bypass ${bypassMode}` : 'default options') + (withMod === 'acid' ? ', Acid + tone + accent mod' : withMod === 'delay' ? ', Send delay + filters + free time + send mod' : withMod ? ', mod input present' : '');
   test(`process() does not allocate (${label})`, async () => {
     const fx = createFxDsp(48000, limiter ? { limiter, bypassMode } : undefined);
     fx.setTempo(120, 0, true);
-    fx.load([1, 12, -3, 0.8, 1, 0.75, 0.5, 0.4, 1, 0.02, 0.6, 0.7, 0.3, 0.35].concat(withMod === 'acid' ? [1, 0.4, 0.7, 0.5] : []), 0, true);
+    fx.load([1, 12, -3, 0.8, 1, 0.75, 0.5, 0.4, 1, 0.02, 0.6, 0.7, 0.3, 0.35].concat(withMod === 'acid' ? [1, 0.4, 0.7, 0.5] : withMod === 'delay' ? [0, 100 / 99, 0, 0, 0.5, 120, 1, 0.4, 0.6, 0.3] : []), 0, true);
     const inL = new Float32Array(128).map((_, i) => Math.sin(i)), inR = inL.slice();
     const oL = new Float32Array(128), oR = new Float32Array(128);
     const mod = withMod ? new Float32Array(128).map((_, i) => (i < 40 ? 0.8 : 0)) : null;
@@ -72,7 +72,7 @@ test('hot path has no allocating syntax (static scan of the per-sample code)', (
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 const GATE = fileURLToPath(new URL('./bench/alloc-gate.mjs', import.meta.url));
-for (const scenario of ['steady', 'events', 'tempo', 'sparse', 'holdToggles', 'clearFade', 'modInput', 'acidMod']) {
+for (const scenario of ['steady', 'events', 'tempo', 'sparse', 'holdToggles', 'clearFade', 'modInput', 'acidMod', 'delaySendMod']) {
   test(`heap-delta gate: 0 B and 0 GCs (${scenario})`, () => {
     const out = execFileSync(process.execPath, ['--expose-gc', '--min-semi-space-size=64', '--max-semi-space-size=64', GATE, scenario],
       { encoding: 'utf8', env: { ...process.env, TRIES: '12' } });

@@ -12,5 +12,7 @@
 .nc-fx-row input[type=range]{width:100%;margin:0;accent-color:var(--nc-ui-accent,currentColor)}
 .nc-fx-row select{font:inherit;font-size:var(--nc-ui-label-size,12px);color:inherit;background:transparent;border:1px solid currentColor}
 .nc-fx-row output{font-family:var(--nc-ui-font-readout,inherit);font-size:var(--nc-ui-readout-size,12px);text-align:right;font-variant-numeric:tabular-nums}
+.nc-fx-row[data-overridden] select{opacity:var(--nc-ui-disabled-opacity,.5)}
+.nc-fx-row[data-free] output{color:var(--nc-ui-accent,inherit);font-weight:600}
 .nc-fx [data-modulated]{transition:none}
 @media (prefers-reduced-motion:reduce){.nc-fx,.nc-fx *{transition:none;animation:none}}

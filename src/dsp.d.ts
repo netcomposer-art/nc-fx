@@ -1,9 +1,10 @@
 export const FX_PARAM: Readonly<{
   DRIVE_ON: 0; DRIVE_DB: 1; DRIVE_OUT_DB: 2; DRIVE_MIX: 3; DRIVE_CURVE: 14; DRIVE_TONE: 15; DRIVE_MOD: 16; DRIVE_MOD_TONE: 17;
   DELAY_ON: 4; DELAY_BEATS: 5; DELAY_FEEDBACK: 6; DELAY_MIX: 7;
+  DELAY_TONE: 18; DELAY_LOW_CUT: 19; DELAY_MODE: 20; DELAY_SEND: 21; DELAY_MOD_SEND: 22; DELAY_BEATS_FREE: 23;
   PLATE_ON: 8; PLATE_PREDELAY: 9; PLATE_SIZE: 10; PLATE_DECAY: 11; PLATE_DAMPING: 12; PLATE_MIX: 13;
 }>;
-export const FX_NPARAMS: 18;
+export const FX_NPARAMS: 24;
 
 export interface FxDspOptions {
   /** 'run' (default): a bypassed effect keeps running, so its tail rings out (ASTRID). 'hold': it costs nothing and its tail is dropped. */

@@ -47,7 +47,7 @@ test('new dials: defaults, laws, readouts; an old state compiles to the old prog
   assert.equal(dialDef('drive', 'curve').format(1), 'Acid');
   const p = compile([{ type: 'drive', bypass: false, dials: { drive_db: 12 } }]); // ASTRID's array form
   assert.equal(p.length, FX_NPARAMS);
-  assert.deepEqual(Array.from(p.slice(14)), [0, 100 / 99, 0, 0]);
+  assert.deepEqual(Array.from(p.slice(14, 18)), [0, 100 / 99, 0, 0]);
 });
 
 test('setParam: drive_db follows the curve (0.1 dB in Acid; back to whole dB, posted and notified, in Smooth)', async () => {

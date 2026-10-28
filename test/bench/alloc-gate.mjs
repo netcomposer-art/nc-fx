@@ -68,6 +68,13 @@ const SCENARIOS = {
     return window((k) => { if (k % 4 === 0) { fx.set(P.DRIVE_DB, 6 + (k % 7) / 10, f + 64); fx.set(P.DRIVE_TONE, (k % 9) / 9, f + 30); }
       for (let i = 0; i < 128; i++) m[i] = 0.9 * Math.exp(-(i + (k & 3) * 128) / 160);
       sine(L, f); for (let i = 0; i < 128; i++) R[i] = L[i] * 0.7; fx.process(L, R, L, R, 128, f, m); f += 128; }); },
+  // PR C: Send delay with tone + low cut, free time moving and the accent on the send (mod route 2).
+  delaySendMod: () => { const fx = mk({ limiter: 'soft' }); const L = new Float32Array(128), R = new Float32Array(128), m = new Float32Array(128); let f = 0;
+    fx.load([0, 0, 0, 1, 1, 0.75, 0.6, 1, 0, 0, 0.5, 0.5, 0, 0, 0, 100 / 99, 0, 0, 0.5, 120, 1, 0.4, 0.6, 0.3], f, true);
+    return window((k) => { if (k % 8 === 0) { fx.set(P.DELAY_BEATS_FREE, 0.3 + (k % 5) / 10, f + 50); fx.set(P.DELAY_TONE, (k % 9) / 9, f + 20); fx.set(P.DELAY_LOW_CUT, 20 + (k % 7) * 50, f + 90); }
+      if (k % 64 === 0) { fx.set(P.DELAY_MODE, (k / 64) % 2, f + 5); fx.setTempo(110 + (k % 30), f + 40); }
+      for (let i = 0; i < 128; i++) m[i] = 0.9 * Math.exp(-(i + (k & 3) * 128) / 160);
+      sine(L, f); for (let i = 0; i < 128; i++) R[i] = L[i] * 0.7; fx.process(L, R, L, R, 128, f, m); f += 128; }); },
   clearFade: () => { const fx = mk({ limiter: 'soft' }); const b = new Float32Array(128); let f = 0;
     return window((k) => { if (k % 300 === 0) fx.clear(f + 7, 5); if (k % 300 === 150) fx.clear(); sine(b, f); fx.process(b, null, b, null, 128, f); f += 128; }); },
 };
