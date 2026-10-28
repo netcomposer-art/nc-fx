@@ -67,3 +67,15 @@ After the first merge (main 3242a05), toward what Bass still needs (design appro
   0.1 dB steps (`stepWhen` in describeParams) so Bass's amounts round-trip within 0.0065; Smooth keeps whole dB, and
   `setParam('drive', 'curve', 0)` re-rounds it (posted and notified). At the defaults the engine runs the old code:
   ASTRID parity is bit-identical and old states load unchanged.
+- **Delay: tone, low cut, Send mode, send + accent, 1/32, Free time.** Six new delay dials (engine indexes 18–23;
+  describeParams now lists 24): `tone` 0–100 (a one-pole low-pass at 800 Hz·2^(4·tone/99), 100 = off, default) and
+  `low_cut` 0–1000 Hz (one-pole high-pass, 0 = off, default), both on the tap inside the feedback loop; `mode` Insert
+  (ASTRID's equal-power wet/dry, default) or Send (dry + mix × wet, Bass's); `send` 0–100 % (default 100) and
+  `mod_send` −100…+100 % (mod route 2, per sample); `beats_free` 0–2 beats (0 = off, default; otherwise 0.125–2,
+  kept exactly, overriding the Timing select through the same 80 ms glide, without ASTRID's 0.1 ms rounding).
+  Timing gains 1/32 (so a saved value under 3/16 now lands on 1/32). Send renders ASTRID-Bass 3608858's delay
+  bit-exact (its read and interpolation order, float32 line and output). The panel shows Free time as a free value
+  and dims Timing while it overrides. At the defaults the engine runs the old code: ASTRID parity is bit-identical.
+- **Mod input notes (Zeta's PR A review).** A never-connected `fx.modInput` feeds silence, not `null`, which renders
+  bit-identical to no mod at any depth (tested in Node and Chrome); `'discrete'` keeps channel 0 of a stereo source
+  (the README shows the splitter wiring). `npm run size` labels KiB and prints exact bytes.
