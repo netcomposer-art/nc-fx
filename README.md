@@ -145,15 +145,19 @@ samples exactly.
   tails fed from that change.
 - **`'soft'` limiter.** Not in ASTRID (ASTRID uses the lookahead). It is now the knee above, not a full-range tanh.
   The lookahead limiter is unchanged and bit-identical.
-- **`clear({fadeMs})`.** New. The instant `clear()` does what ASTRID's `ncChainClear` does (effect tails only;
-  the limiter is left alone).
+- **Instant `clear()` leaves the limiter alone.** ASTRID's `ncChainClear` also rebuilds the limiter
+  (`chain.lim = ncLimiterCreate(...)`), which zeroes the lookahead's 1.5 ms (72 samples at 48 kHz) of dry signal and
+  resets its gain. nc-fx clears the effect tails (and the drive's one-sample state) only, so the dry signal carries on.
+  `clear({fadeMs})` is new.
 - **Denormal snap.** Smoothers land on their target once within 1e-30, so silence can't decay into subnormal
   numbers. The output can differ only below 1e-30, far below any audible or Float32-normal level, and every parity
   test is still identical.
 - **Options and defaults.** `bypassMode: 'hold'` and `maxDelaySeconds` beyond 4.9 s are opt-in extras. The defaults
   `limiter: 'off'` and `preGain: 1` are not ASTRID's master (`'lookahead'` and 0.8): pass those to match it.
-- **Kept as in ASTRID (Peter's call):** the drive's one-sample dip when it is switched on (its antialiasing state is
-  reset then).
+- **Kept as in ASTRID (Peter's call):** the drive's one-sample dip when `drive_db` moves off 0 while the drive is
+  on. At 0 dB the drive is a clean wire and its antialiasing state is held at zero, so the first driven sample is
+  averaged against that zero (DC 0.5 in gives one sample of 0.25). Switching the drive on is not affected: the
+  bypass crossfade starts from fully dry.
 
 **Coming next** (a later PR, from the rest of ASTRID's chain): low-, high- and band-pass filters, a 3-band EQ,
 compressor, width, flanger, chorus and phaser. Also planned: user-reorderable slots, an accent modulation bus,
