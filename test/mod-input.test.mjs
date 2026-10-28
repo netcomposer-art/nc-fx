@@ -98,7 +98,7 @@ function processor(program) {
   p.dsp.process = function (...a) { seen.push(a[6]); return real.apply(this, a); };
   return { p, ctx, seen };
 }
-test('worklet: input 1 channel 0 reaches process() as mod; absent, unconnected or missing gives null; output unchanged', () => {
+test('worklet: input 1 channel 0 reaches process() as mod; no channels (disconnected) or missing gives null; output unchanged', () => {
   const s = defaultState(); s.chain[0].bypass = false; s.chain[1].bypass = false; s.chain[1].dials.mix = 50;
   const program = Array.from(compile(s));
   const inL = new Float32Array(128).map((_, i) => Math.sin(i / 3)), inR = inL.map((v) => -v), cv = new Float32Array(128).fill(0.7);
@@ -135,4 +135,22 @@ test('core: modInput: true creates a mono fx.modInput wired to node input 1; def
   await plain.ready;
   assert.equal(ctx2.node.options.numberOfInputs, 1);
   for (const v of [false, 1, 'yes']) assert.equal(createFxCore(mockContext(), { modInput: v }).modInput, null);
+});
+
+test('zero CV with nonzero depths renders bit-identical to no mod (a never-connected modInput feeds silence)', () => {
+  const n = 4 * 9600, [inL, inR] = noiseBursts(n, 3);
+  const cases = {
+    'Smooth + accent depths': [{ curve: 0, drive_db: 12, mod_drive: 70, mod_tone: -40, tone: 50 }, {}],
+    'Acid + accent depths': [{ curve: 1, drive_db: 9.5, mod_drive: 100, mod_tone: 30, tone: 60 }, {}],
+    'Insert delay + send mod': [{}, { mix: 40, send: 60, mod_send: 80, tone: 40, low_cut: 120 }],
+    'Send delay + send mod': [{}, { mode: 1, mix: 100, send: 25, mod_send: -50, beats_free: 0.3 }]
+  };
+  for (const name in cases) {
+    const s = defaultState();
+    s.chain[0].bypass = false; Object.assign(s.chain[0].dials, cases[name][0]);
+    s.chain[1].bypass = false; Object.assign(s.chain[1].dials, cases[name][1]);
+    const program = compile(s);
+    const a = render({}, program, inL, inR, null), b = render({}, program, inL, inR, new Float32Array(n));
+    assert.ok(identical(a[0], b[0]) && identical(a[1], b[1]), name);
+  }
 });

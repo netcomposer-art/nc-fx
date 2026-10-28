@@ -923,7 +923,9 @@ class NcFxProcessor extends AudioWorkletProcessor {
     var inp = inputs[0];
     var inL = inp && inp.length > 0 ? inp[0] : null;
     var inR = inp && inp.length > 1 ? inp[1] : null;
-    // Input 1 is the mod input (createFxCore({ modInput: true })): its channel 0, or null when absent or unconnected.
+    // Input 1 is the mod input (createFxCore({ modInput: true })): its channel 0. A never-connected fx.modInput still
+    // feeds silence (the browser hands over silent channels), so mod is a zero buffer then, which renders the same as
+    // no mod; null only when input 1 has no channels (e.g. after fx.modInput.disconnect()) or the node has one input.
     var mi = inputs.length > 1 ? inputs[1] : null;
     var mod = mi && mi.length > 0 ? mi[0] : null;
     this.dsp.process(inL, inR, out[0], out.length > 1 ? out[1] : null, out[0].length, currentFrame, mod);
