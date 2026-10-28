@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Docs: "Differs from ASTRID" now lists that the instant `clear()` leaves the limiter alone (ASTRID's
+  `ncChainClear` rebuilds it), and the drive dip is described correctly: it happens when `drive_db` moves off 0
+  with the drive on, not when the drive is switched on (Zeta).
+
 ## 0.1.0 (unreleased)
 
 API approved by Zeta's review, 2026-10-27. Changes from that review:
@@ -42,7 +48,7 @@ Peter's answers and Zeta's re-review (2026-10-28):
   0.999/0.001. Differs from ASTRID only while a bypass change is fading (see the README's "Differs from ASTRID").
 - **Full queue.** An event due before the head of a full queue (or now) is applied by itself instead of pushing the
   head out early, which could undo a later change (mix 0.8 at frame 10000, then 0.2 now, used to end at 0.2).
-- The drive's one-sample dip on enable stays as in ASTRID (Peter's call).
+- The drive's one-sample dip when `drive_db` moves off 0 (drive on) stays as in ASTRID (Peter's call).
 
 First cut:
 
