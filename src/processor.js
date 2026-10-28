@@ -13,6 +13,19 @@ class NcFxProcessor extends AudioWorkletProcessor {
     if (typeof po.bpm === 'number') this.dsp.setTempo(po.bpm, 0, true);
     if (po.program) this.dsp.load(po.program, 0, true);
     this.alive = true;
+    // Calls made on the main thread before this node existed, in call order. A time at or before the
+    // current frame is clamped to now (and snaps); a future time is applied exactly. Equal frames keep
+    // their order in the engine's queue. Runs once, in the constructor, before the first process().
+    var pend = po.pending;
+    if (pend && pend.length) {
+      for (var k = 0; k < pend.length; k++) {
+        var m = pend[k];
+        if (!m || typeof m !== 'object') continue;
+        var f = typeof m.when === 'number' && m.when > 0 ? Math.round(m.when * sampleRate) : 0;
+        if (f <= currentFrame) this.dispatch(m, 0, true);
+        else this.dispatch(m, f, !!m.snap);
+      }
+    }
     var self = this;
     // Messages are the one place the audio thread receives garbage (the structured clone of each message);
     // keep them few: one per user gesture or tempo change, never per block.
@@ -21,13 +34,16 @@ class NcFxProcessor extends AudioWorkletProcessor {
   onMessage(m) {
     if (!m || typeof m !== 'object') return;
     var frame = typeof m.when === 'number' && m.when > 0 ? Math.round(m.when * sampleRate) : 0;
+    if (m.t === 'dispose') { this.alive = false; this.port.onmessage = null; return; }
+    this.dispatch(m, frame, !!m.snap);
+  }
+  dispatch(m, frame, snap) {
     var d = this.dsp;
     switch (m.t) {
-      case 'p': d.set(m.i, m.v, frame, !!m.snap); break;
-      case 'load': if (m.program) d.load(m.program, frame, !!m.snap); break;
-      case 'tempo': d.setTempo(m.bpm, frame, !!m.snap); break;
+      case 'p': d.set(m.i, m.v, frame, snap); break;
+      case 'load': if (m.program) d.load(m.program, frame, snap); break;
+      case 'tempo': d.setTempo(m.bpm, frame, snap); break;
       case 'clear': d.clear(frame); break;
-      case 'dispose': this.alive = false; this.port.onmessage = null; break;
     }
   }
   process(inputs, outputs) {

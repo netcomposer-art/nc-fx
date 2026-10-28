@@ -50,6 +50,9 @@ export function createFxCore(ctx, opts) {
   var o = opts || {};
   var state = sanitize(o.state);
   var bpm = Math.min(400, Math.max(20, finiteOr(o.bpm, 120)));
+  // The worklet starts from the construction-time state and tempo. Calls made before it is ready are
+  // queued (in call order) and replayed at their AudioContext times, never folded into this start.
+  var startProgram = Array.from(compile(state)), startBpm = bpm, pending = [];
   var limiter = o.limiter === 'soft' || o.limiter === 'lookahead' ? o.limiter : 'off'; // opt-in
   var bypassMode = o.bypassMode === 'hold' ? 'hold' : 'run'; // default 'run': tails ring out
   var preGain = finiteOr(o.preGain, 1); // opt-in (ASTRID: 0.8)
@@ -62,7 +65,20 @@ export function createFxCore(ctx, opts) {
   var node = null, status = 'loading', error = null, disposed = false;
   var listeners = [];
 
-  function post(msg) { if (node) node.port.postMessage(msg); }
+  function post(msg) {
+    if (node) node.port.postMessage(msg);
+    else if (!disposed) pending.push(msg);
+  }
+  // Pending calls whose time has passed (or that had none) become 'now' and snap; future ones keep their time.
+  function takePending(now) {
+    var out = pending.map(function (m) {
+      var c = Object.assign({}, m);
+      if (!(c.when > now)) { c.when = 0; if (c.t !== 'clear') c.snap = true; }
+      return c;
+    });
+    pending = [];
+    return out;
+  }
   function emit(change) {
     for (var i = 0; i < listeners.length; i++) {
       try { listeners[i](change); } catch (e) { if (typeof console !== 'undefined') console.error(e); }
@@ -75,7 +91,10 @@ export function createFxCore(ctx, opts) {
     node = new AudioWorkletNode(ctx, PROCESSOR_NAME, {
       numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2],
       channelCount: 2, channelCountMode: 'explicit', channelInterpretation: 'speakers',
-      processorOptions: { program: Array.from(compile(state)), bpm: bpm, bypassMode: bypassMode, limiter: limiter, preGain: preGain }
+      processorOptions: {
+        program: startProgram, bpm: startBpm, bypassMode: bypassMode, limiter: limiter, preGain: preGain,
+        pending: takePending(ctx.currentTime)
+      }
     });
     input.connect(node);
     node.connect(wet);
@@ -89,6 +108,7 @@ export function createFxCore(ctx, opts) {
     status = 'ready';
   }, function (e) {
     status = 'unavailable'; // stays a wire: the sound goes on, dry
+    pending = [];
     error = e;
   });
 
@@ -157,6 +177,7 @@ export function createFxCore(ctx, opts) {
       if (disposed) return;
       disposed = true;
       status = 'disposed';
+      pending = [];
       listeners.length = 0;
       if (node) { node.port.postMessage({ t: 'dispose' }); node.port.close(); try { node.disconnect(); } catch (e) { /* */ } }
       [input, dry, wet, output].forEach(function (n) { try { n.disconnect(); } catch (e) { /* */ } });

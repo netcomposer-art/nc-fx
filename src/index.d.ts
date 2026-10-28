@@ -28,6 +28,11 @@ export interface FxCore {
   readonly output: GainNode;
   /** Resolves once the chain is in the path, or it gave up (status 'unavailable'). Never rejects. */
   readonly ready: Promise<void>;
+  /**
+   * setParam / setState / setTempo / clear called before `ready` are queued in call order and replayed when the
+   * worklet starts: a future `at` is applied exactly; a past or omitted one is clamped to now. They never change
+   * the starting state (that is `opts.state` / `opts.bpm` at construction).
+   */
   readonly status: 'loading' | 'ready' | 'unavailable' | 'disposed';
   readonly error: unknown;
   readonly latencySamples: number;

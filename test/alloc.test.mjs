@@ -17,9 +17,10 @@ async function gcsDuring(fn) {
   return n;
 }
 
-for (const [limiter, bypassMode] of [['lookahead', 'hold'], ['soft', 'run'], ['off', 'hold']]) {
-  test(`process() does not allocate (limiter ${limiter}, bypass ${bypassMode})`, async () => {
-    const fx = createFxDsp(48000, { limiter, bypassMode });
+for (const [limiter, bypassMode] of [[undefined, undefined], ['lookahead', 'hold'], ['soft', 'run'], ['off', 'hold']]) {
+  const label = limiter ? `limiter ${limiter}, bypass ${bypassMode}` : 'default options';
+  test(`process() does not allocate (${label})`, async () => {
+    const fx = createFxDsp(48000, limiter ? { limiter, bypassMode } : undefined);
     fx.setTempo(120, 0, true);
     fx.load([1, 12, -3, 0.8, 1, 0.75, 0.5, 0.4, 1, 0.02, 0.6, 0.7, 0.3, 0.35], 0, true);
     const inL = new Float32Array(128).map((_, i) => Math.sin(i)), inR = inL.slice();

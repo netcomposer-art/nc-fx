@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFxCore, createFx, PROCESSOR_NAME, defaultState } from '../src/index.js';
+import { compile } from '../src/params.js';
 import { mockContext } from './mock-audio.mjs';
 
 test('wires input -> node -> output once the worklet loads, sending the compiled program and tempo', async () => {
@@ -95,4 +96,42 @@ test('dispose tells the processor to stop and disconnects; createFx adds mount()
   assert.equal(fx.input.out.size, 0);
   assert.equal(fx.setParam('drive', 'mix', 10), undefined);
   assert.deepEqual(defaultState().chain.map((c) => c.bypass), [true, true, true]);
+});
+
+test('calls before the worklet is ready are queued in order, kept off the starting state, and clamped if past', async () => {
+  const ctx = mockContext({ currentTime: 0 });
+  const fx = createFxCore(ctx, { moduleUrl: '/w.js', bpm: 120 });
+  fx.setParam('delay', 'mix', 100, 12.5);        // future: kept exactly
+  fx.setParam('drive', 'bypass', false, 3);      // past by the time the node exists: clamped to now
+  fx.setTempo(90);                               // untimed: now
+  fx.setState({ v: 1, chain: [] }, { at: 4 });   // past: now
+  fx.clear(11);                                  // future
+  fx.setParam('delay', 'mix', 40, 12.5);         // same time as the first: must stay after it
+  assert.equal(fx.getParam('delay', 'mix'), 40); // the mirror is current at once
+  ctx.currentTime = 10;                          // the context ran on while the module loaded
+  await fx.ready;
+  assert.deepEqual(ctx.posted, []);              // nothing was dropped or sent early
+  const po = ctx.node.options.processorOptions;
+  assert.deepEqual(po.program, Array.from(compile(defaultState()))); // the start is the construction state
+  assert.equal(po.bpm, 120);
+  assert.deepEqual(po.pending.map((m) => [m.t, m.when, m.snap]), [
+    ['p', 12.5, undefined], ['p', 0, true], ['tempo', 0, true], ['load', 0, true], ['clear', 11, undefined], ['p', 12.5, undefined]
+  ]);
+  assert.deepEqual([po.pending[0].i, po.pending[0].v, po.pending[5].v], [7, 1, 0.4]);
+  fx.setParam('drive', 'mix', 10);               // after ready: posted live, not queued
+  assert.deepEqual(ctx.posted.at(-1), { t: 'p', i: 3, v: 0.1, when: 0 });
+});
+
+test('a queue built before ready is dropped on dispose or when the worklet is unavailable', async () => {
+  const ctx = mockContext({ fail: true });
+  const fx = createFxCore(ctx, { moduleUrl: '/w.js' });
+  fx.setParam('delay', 'mix', 100, 1);
+  await fx.ready;
+  assert.equal(fx.status, 'unavailable');
+  const ctx2 = mockContext();
+  const fx2 = createFxCore(ctx2, { moduleUrl: '/w.js' });
+  fx2.setParam('delay', 'mix', 100, 1);
+  fx2.dispose();
+  await fx2.ready;
+  assert.equal(ctx2.node, undefined);
 });

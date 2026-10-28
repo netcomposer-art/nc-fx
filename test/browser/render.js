@@ -64,6 +64,20 @@ async function main() {
     const echo1 = Math.abs(out[Math.round(0.375 * SR)]), echo2 = Math.abs(out[SR / 2 + 100 + Math.round(0.375 * SR)]);
     check('scheduled param lands on the audio clock (no echo before 0.5 s, echo after)', echo1 < 1e-6 && echo2 > 0.1, `${echo1} ${echo2}`);
   }
+  // Called before the worklet is ready: queued, then applied at its AudioContext time (not folded into the start).
+  {
+    const ctx = new OfflineAudioContext(2, N, SR);
+    const imp = ctx.createBuffer(1, N, SR); const d = imp.getChannelData(0); d[0] = 1; d[SR / 2 + 100] = 1;
+    const src = ctx.createBufferSource(); src.buffer = imp;
+    const fx = createFxCore(ctx, { state: (() => { const s = defaultState(); s.chain[1].bypass = false; s.chain[1].dials.mix = 0; s.chain[1].dials.feedback = 0; return s; })() });
+    fx.setParam('delay', 'mix', 100, 0.5); // fx.status is still 'loading'
+    const early = fx.status;
+    await fx.ready;
+    src.connect(fx.input); fx.output.connect(ctx.destination); src.start(0);
+    const out = (await ctx.startRendering()).getChannelData(0);
+    const echo1 = Math.abs(out[Math.round(0.375 * SR)]), echo2 = Math.abs(out[SR / 2 + 100 + Math.round(0.375 * SR)]);
+    check('a timed call made before ready is applied at its time (no echo before 0.5 s, echo after)', early === 'loading' && out[0] === 1 && echo1 < 1e-6 && echo2 > 0.1, `${early} ${out[0]} ${echo1} ${echo2}`);
+  }
   // Panel in a real DOM.
   {
     const ctx = new OfflineAudioContext(2, 128, SR);
