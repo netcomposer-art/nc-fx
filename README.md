@@ -12,7 +12,9 @@ These are ASTRID's Hacks, moved into a package so that Rhythm, Bass and ASTRID a
 - **Real-time safe.** Nothing allocates on the audio thread: no allocation in `process()` and none for a parameter,
   tempo or bypass change. A test enforces this with a GC observer. All timing runs on the audio clock and is
   sample-accurate.
-- **Small API.** The state is JSON-serialisable.
+- **Transparent by default.** With every effect bypassed and default options, the output is the input, bit for bit.
+  The limiter and pre-gain are opt-in (see [Defaults and each app's choice](#defaults-and-each-apps-choice)).
+- **Small API.** The state is JSON-serialisable. The API is approved (Zeta's review, 2026-10-27).
 - **Optional panel.** The UI is ultra-minimal, built on nc-ui tokens, and lazy-loaded.
 
 MIT licensed. The package name is `@netcomposer/nc-fx`. It isn't published to npm; install it from git.
@@ -48,6 +50,41 @@ save({ fx: fx.getState() });                                    // JSON
 
 You can use `followClock(fx, clock)` from `@netcomposer/nc-fx/tempo` instead of the `onChange` line.
 
+## Defaults and each app's choice
+
+The defaults change nothing you didn't ask for:
+
+| Option | Default | What it means |
+|---|---|---|
+| `limiter` | `'off'` | No limiter, no latency. Opt in with `'soft'` (zero-latency tanh clip to −1 dB) or `'lookahead'` (−1 dB ceiling, 1.5 ms latency). |
+| `preGain` | `1` | Unity gain before the limiter stage. |
+| `bypassMode` | `'run'` | A bypassed effect keeps running, so delay and reverb tails ring out when you bypass it and are still there when you turn it back on, as in ASTRID. `'hold'` opts in to zero CPU while bypassed, at the cost of dropping the tail. |
+
+With all three at their defaults and every effect bypassed, the chain is exactly unity gain. The node, engine and
+real-AudioWorklet tests check this bit-for-bit using the defaults.
+
+Each app opts in to what it needs:
+
+| App | Options | Why |
+|---|---|---|
+| **Rhythm** | `limiter: 'soft'` (likely) | Catches overs on the drum sum with zero latency, so the 1–3 ms tab sync is unaffected. Pre-gain stays 1. |
+| **ASTRID** | `limiter: 'lookahead', preGain: 0.8` | Matches today's master (`ncLimiter*` and the 0.8 from `ncRender`). Bypass is already `'run'`, ASTRID's behaviour. |
+| **Bass** | `limiter: 'lookahead', preGain: 0.8` | From Bass's design. That design also asked for `bypassMode: 'hold'`; add it to opt in. |
+
+```js
+// Rhythm, as a node:
+const fx = createFx(ctx, { moduleUrl: workletUrl, limiter: 'soft' });
+// Rhythm, embedded in its own worklet:
+const core = createFxDsp(sampleRate, { limiter: 'soft' });
+// ASTRID (sounds like today):
+const fx = createFx(ctx, { moduleUrl: workletUrl, limiter: 'lookahead', preGain: 0.8 });
+// Bass:
+const fx = createFx(ctx, { moduleUrl: workletUrl, limiter: 'lookahead', preGain: 0.8, bypassMode: 'hold' });
+```
+
+**Meters.** Main-thread meters (peak and limiter gain reduction posted from the worklet) come with the next batch
+of effects. Today the engine keeps per-block peaks and `takeGainReduction()` for code that embeds `createFxDsp`.
+
 ## Effects
 
 Effects run in a fixed order. Each one has On/Off (bypass) and a mix:
@@ -57,7 +94,7 @@ Effects run in a fixed order. Each one has On/Off (bypass) and a mix:
 | **Drive** (`drive`) | Drive 0–24 dB (0 = clean), Output −12…+12 dB, Mix 0–100 % | `ncDrive*`: tanh with first-order ADAA, level-compensated |
 | **Delay** (`delay`) | Timing 1/16, 1/8, 1/8 dotted, 1/4, 1/4 dotted, 1/2 (tempo-synced, max 4.9 s); Feedback 0–90 %; Wet/dry (`mix`) 0–100 % | `ncDelay*`: a stereo tap with linear interpolation and an 80 ms glide on time changes |
 | **Reverb** (`plate`, alias `reverb`) | Pre-delay 0–200 ms, Size 0–100 (0.5×–1.5×), Decay, Damping, Mix 0–100 % | `ncPlate*`: Dattorro plate (JAES 1997) |
-| Limiter (fixed, last) | `limiter: 'lookahead'` (default: −1 dB ceiling, 1.5 ms latency) · `'soft'` (zero-latency tanh clip) · `'off'` | `ncLimiter*` and the 0.8 pre-gain from `ncRender` |
+| Limiter (fixed, last) | `limiter: 'off'` (default) · `'soft'` (zero-latency tanh clip) · `'lookahead'` (−1 dB ceiling, 1.5 ms latency); `preGain` 1 (default; ASTRID 0.8) | `ncLimiter*` and the 0.8 pre-gain from `ncRender` |
 
 **Coming next** (a later PR, from the rest of ASTRID's chain): low-, high- and band-pass filters, a 3-band EQ,
 compressor, width, flanger, chorus and phaser. Also planned: user-reorderable slots, an accent modulation bus,
@@ -72,10 +109,10 @@ createFxCore(ctx: BaseAudioContext, opts?: {
   state?: unknown;            // nc-fx state or ASTRID's saved hacks array; default: all bypassed
   bpm?: number;               // 120
   moduleUrl?: string | URL;   // where dist/worklet.js is served; omitted: a lazy Blob URL
-  limiter?: 'lookahead' | 'soft' | 'off';
-  bypassMode?: 'hold' | 'run';// hold (default): a bypassed effect costs no CPU and drops its tail
-                              // run: it keeps running (ASTRID's behaviour)
-  preGain?: number;           // 0.8 (ASTRID's master)
+  limiter?: 'lookahead' | 'soft' | 'off'; // 'off' (default): opt in to 'soft' or 'lookahead'
+  bypassMode?: 'hold' | 'run';// run (default): a bypassed effect keeps running, so tails ring out (ASTRID)
+                              // hold: it costs no CPU and drops its tail
+  preGain?: number;           // 1 (default); ASTRID's master is 0.8
   crossfade?: number;         // 0.012 s, from the dry wire to the chain once the worklet is up
 }): FxCore
 ```
@@ -90,8 +127,23 @@ createFxCore(ctx: BaseAudioContext, opts?: {
 | `setTempo(bpm, at?)` / `getTempo()` | The delay follows the tempo, gliding over 80 ms like tape. |
 | `clear(at?)` | Panic: drops all tails. |
 | `onChange(cb)` | `cb({effect, key, value})` runs after every change. It returns an unsubscribe function. |
-| `latencySamples` | 72 at 48 kHz with the lookahead limiter, otherwise 0. |
+| `latencySamples` | 0 by default; 72 at 48 kHz with `limiter: 'lookahead'`. |
 | `dispose()` | |
+
+#### Calls made before the worklet is ready
+
+The chain is usable at once, before `ready` resolves. `setParam`, `setState`, `setTempo` and `clear` made while
+the worklet loads are queued in call order and handed to the processor when it starts, before it renders anything:
+
+- a **future** `at` is applied exactly at that AudioContext time, sample-accurately;
+- a **past** `at` (the context ran on while the module loaded), or no `at`, is clamped to now and applied at the
+  first sample;
+- order is preserved, including calls for the same time;
+- nothing is folded into the starting state, which is `opts.state` and `opts.bpm` as given at construction.
+
+`getParam` and `getState` reflect the calls at once. If AudioWorklet is unavailable, or you `dispose()` first, the
+queue is dropped. The engine schedules up to 256 future events at a time, so don't queue more future changes than
+that before `ready`.
 
 ### `createFx(ctx, opts?)`: the core plus a panel
 
@@ -107,7 +159,7 @@ instead of adding a node:
 ```js
 import { createFxDsp } from '@netcomposer/nc-fx/dsp';        // bundle into your worklet
 import { compile } from '@netcomposer/nc-fx/params';        // main thread: state -> Float64Array program
-const fx = createFxDsp(sampleRate, { limiter: 'soft' });    // allocates everything here
+const fx = createFxDsp(sampleRate, { limiter: 'soft' });    // allocates everything here; same defaults as the node
 fx.load(program, 0, true); fx.setTempo(bpm, frame);         // frame = absolute sample frame
 fx.process(inL, inR, outL, outR, 128, currentFrame);        // allocation-free
 ```
