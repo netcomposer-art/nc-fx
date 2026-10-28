@@ -1,0 +1,69 @@
+{
+  "name": "@netcomposer/nc-fx",
+  "version": "0.1.0",
+  "description": "NetComposer's shared effects chain (drive, tempo-synced delay, plate reverb) as a framework-free Web Audio package, with an optional minimal panel.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "author": "Peter Semmelhack (https://psem.me/)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/netcomposer-art/nc-fx.git"
+  },
+  "sideEffects": false,
+  "main": "./src/index.js",
+  "types": "./src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.js"
+    },
+    "./dsp": {
+      "types": "./src/dsp.d.ts",
+      "default": "./src/dsp.js"
+    },
+    "./params": {
+      "types": "./src/params.d.ts",
+      "default": "./src/params.js"
+    },
+    "./tempo": {
+      "types": "./src/tempo.d.ts",
+      "default": "./src/tempo.js"
+    },
+    "./ui": {
+      "types": "./src/ui.d.ts",
+      "default": "./src/ui.js"
+    },
+    "./ui.css": "./dist/ui.css",
+    "./worklet": "./dist/worklet.js",
+    "./worklet.js": "./dist/worklet.js",
+    "./worklet-source": {
+      "types": "./src/worklet-source.d.ts",
+      "default": "./dist/worklet-source.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "dist",
+    "README.md",
+    "LICENSE",
+    "NOTICE.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check:build": "node scripts/build.mjs --check",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --test --expose-gc test/*.test.mjs",
+    "test:browser": "node test/browser/run.mjs",
+    "size": "node scripts/size.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "playwright": "^1.56.1",
+    "typescript": "~5.9.3"
+  }
+}
