@@ -153,6 +153,7 @@ function createFxDsp(sampleRate, opts) {
   // 12 beats_free (0 off), 13 modeS, 14 modeT (0 Insert, 1 Send), 15 sendS, 16 sendT, 17 send mod depth (this block),
   // 18 toneT (> 1 off), 19 toneS, 20 tone coef, 21 lowCutT (Hz, 0 off), 22 lowCutS, 23 low-cut coef, 24 lpL, 25 lpR, 26 hpL, 27 hpR
   var DL = new Float64Array(28);
+  var DT = new Float64Array(2); // the delay taps on their way through delayFilters()
   DL[1] = 0.75 * sr; DL[2] = 0.75 * sr; DL[3] = 0.35; DL[4] = 0.35; DL[9] = 0.75;
   DL[15] = 1; DL[16] = 1; DL[18] = 100 / 99; DL[19] = 1;
   DL[20] = 1 - Math.exp((-TWOPI * 12800) / sr); // tone coef at toneS = 1 (delayCoefs(), before it is defined)
@@ -331,7 +332,7 @@ function createFxDsp(sampleRate, opts) {
       left -= end - pos;
       if (end >= n) { FC[4] = li + 1; FC[5] = 0; } else FC[5] = end;
     }
-    if (FC[3] >= dn && FC[4] >= N_LINES) { DL[0] = 0; clearPlateState(); FC[0] = 3; }
+    if (FC[3] >= dn && FC[4] >= N_LINES) { DL[0] = 0; DL[24] = 0; DL[25] = 0; DL[26] = 0; DL[27] = 0; clearPlateState(); FC[0] = 3; }
   }
   /** The instant clear: delay and plate tails and the drive's one-sample state. The limiter is left alone. */
   function clearAll() {
@@ -585,7 +586,7 @@ function createFxDsp(sampleRate, opts) {
       var j0 = rp | 0, fr = rp - j0, j1 = j0 + 1 >= dn ? 0 : j0 + 1;
       dL = (dBufL[j0] + (dBufL[j1] - dBufL[j0]) * fr) * tg;
       dR = (dBufR[j0] + (dBufR[j1] - dBufR[j0]) * fr) * tg;
-      if (filt) { dL = delayFilterL(dL); dR = delayFilterR(dR); }
+      if (filt) { DT[0] = dL; DT[1] = dR; delayFilters(); dL = DT[0]; dR = DT[1]; } // through DT: no double crosses a call
       // The line is float32 (as Bass's); no 1e-15 flush here, the float32 store ends a tail at its own floor.
       dBufL[w] = xL * tg * amt + dL * fb;
       dBufR[w] = xR * tg * amt + dR * fb;
@@ -604,7 +605,7 @@ function createFxDsp(sampleRate, opts) {
       var bL = aL === 0 ? dn - 1 : aL - 1;
       dL = (dBufL[aL] * (1 - f) + dBufL[bL] * f) * tg;
       dR = (dBufR[aL] * (1 - f) + dBufR[bL] * f) * tg;
-      if (filt) { dL = delayFilterL(dL); dR = delayFilterR(dR); }
+      if (filt) { DT[0] = dL; DT[1] = dR; delayFilters(); dL = DT[0]; dR = DT[1]; } // through DT: no double crosses a call
       var wl, wr;
       if (amt === 1) { wl = xL * tg + fb * dL; wr = xR * tg + fb * dR; } else { wl = xL * tg * amt + fb * dL; wr = xR * tg * amt + fb * dR; }
       dBufL[w] = (wl > -1e-15 && wl < 1e-15) ? 0 : wl;
@@ -625,29 +626,20 @@ function createFxDsp(sampleRate, opts) {
     IO[0] = dryG * xL + wetG * oL;
     IO[1] = dryG * xR + wetG * oR;
   }
-  // Tone LP then low-cut HP on one tap (Bass: lp += (tap - lp) * toneA; hp += (lp - hp) * cutA; wet = lp - hp).
+  // Tone LP then low-cut HP on the taps in DT (Bass: lp += (tap - lp) * toneA; hp += (lp - hp) * cutA; wet = lp - hp).
   // Off/off skips this. Tone off passes the tap; low cut off lets the HP state fade out (no step), then stops.
-  function delayFilterL(x) {
-    var lp = x;
-    if (DL[18] <= 1) { lp = DL[24] + (x - DL[24]) * DL[20]; if (lp > -LP_FLUSH && lp < LP_FLUSH) lp = 0; }
-    DL[24] = lp;
-    var hp = DL[26];
-    if (DL[22] !== 0) hp += (lp - hp) * DL[23];
-    if (DL[21] === 0) hp -= hp * kFast;
-    if (hp > -LP_FLUSH && hp < LP_FLUSH) hp = 0;
-    DL[26] = hp;
-    return lp - hp;
-  }
-  function delayFilterR(x) {
-    var lp = x;
-    if (DL[18] <= 1) { lp = DL[25] + (x - DL[25]) * DL[20]; if (lp > -LP_FLUSH && lp < LP_FLUSH) lp = 0; }
-    DL[25] = lp;
-    var hp = DL[27];
-    if (DL[22] !== 0) hp += (lp - hp) * DL[23];
-    if (DL[21] === 0) hp -= hp * kFast;
-    if (hp > -LP_FLUSH && hp < LP_FLUSH) hp = 0;
-    DL[27] = hp;
-    return lp - hp;
+  function delayFilters() {
+    for (var c = 0; c < 2; c++) {
+      var x = DT[c], lp = x;
+      if (DL[18] <= 1) { lp = DL[24 + c] + (x - DL[24 + c]) * DL[20]; if (lp > -LP_FLUSH && lp < LP_FLUSH) lp = 0; }
+      DL[24 + c] = lp;
+      var hp = DL[26 + c];
+      if (DL[22] !== 0) hp += (lp - hp) * DL[23];
+      if (DL[21] === 0) hp -= hp * kFast;
+      if (hp > -LP_FLUSH && hp < LP_FLUSH) hp = 0;
+      DL[26 + c] = hp;
+      DT[c] = lp - hp;
+    }
   }
   function plateStage() {
     var xL = IO[0], xR = IO[1];
