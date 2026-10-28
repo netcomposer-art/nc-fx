@@ -50,9 +50,9 @@ export function createFxCore(ctx, opts) {
   var o = opts || {};
   var state = sanitize(o.state);
   var bpm = Math.min(400, Math.max(20, finiteOr(o.bpm, 120)));
-  var limiter = o.limiter === 'soft' || o.limiter === 'off' ? o.limiter : 'lookahead';
+  var limiter = o.limiter === 'soft' || o.limiter === 'lookahead' ? o.limiter : 'off'; // opt-in
   var bypassMode = o.bypassMode === 'run' ? 'run' : 'hold';
-  var preGain = finiteOr(o.preGain, 0.8);
+  var preGain = finiteOr(o.preGain, 1); // opt-in (ASTRID: 0.8)
   var fade = Math.max(0, finiteOr(o.crossfade, 0.012));
   var input = ctx.createGain(), output = ctx.createGain(), dry = ctx.createGain(), wet = ctx.createGain();
   wet.gain.value = 0;

@@ -13,7 +13,9 @@ export interface FxCoreOptions {
   /** URL of dist/worklet.js (e.g. Vite `import u from '@netcomposer/nc-fx/worklet?url'`). Omitted: Blob URL. */
   moduleUrl?: string | URL;
   bypassMode?: 'hold' | 'run';
+  /** Default 'off' (transparent). Opt in: 'soft' (zero latency) or 'lookahead' (1.5 ms latency). */
   limiter?: 'lookahead' | 'soft' | 'off';
+  /** Default 1 (transparent). ASTRID's master uses 0.8. */
   preGain?: number;
   /** Seconds for the wire -> chain crossfade when the worklet arrives. Default 0.012. */
   crossfade?: number;

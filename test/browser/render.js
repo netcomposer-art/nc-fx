@@ -20,7 +20,7 @@ async function render(edit, opts) {
   buf.copyToChannel(inL, 0); buf.copyToChannel(inR, 1);
   const src = ctx.createBufferSource(); src.buffer = buf;
   const s = defaultState(); if (edit) edit(s);
-  const fx = createFxCore(ctx, { limiter: 'off', preGain: 1, state: s, ...opts });
+  const fx = createFxCore(ctx, { state: s, ...opts }); // default options
   await fx.ready;
   src.connect(fx.input); fx.output.connect(ctx.destination); src.start(0);
   const out = await ctx.startRendering();
@@ -38,7 +38,7 @@ async function main() {
   // Blob-URL fallback (lazy chunk) and the served module URL both load the processor.
   const a = await render(null);
   check('worklet loads via lazy Blob URL', a.status === 'ready', a.status);
-  check('all bypassed (limiter off, pre-gain 1) is bit-identical to the input', same(a.L, inL) && same(a.R, inR));
+  check('all bypassed with default options is bit-identical to the input (exact unity)', same(a.L, inL) && same(a.R, inR));
   const b = await render(null, { moduleUrl: new URL('../../dist/worklet.js', import.meta.url).href });
   check('worklet loads via moduleUrl (dist/worklet.js)', b.status === 'ready', b.status);
   for (const [type, on] of Object.entries(ON)) {
@@ -54,7 +54,7 @@ async function main() {
     const ctx = new OfflineAudioContext(2, N, SR);
     const imp = ctx.createBuffer(1, N, SR); const d = imp.getChannelData(0); d[0] = 1; d[SR / 2 + 100] = 1;
     const src = ctx.createBufferSource(); src.buffer = imp;
-    const fx = createFxCore(ctx, { limiter: 'off', preGain: 1, state: (() => { const s = defaultState(); s.chain[1].bypass = false; s.chain[1].dials.mix = 0; s.chain[1].dials.feedback = 0; return s; })() });
+    const fx = createFxCore(ctx, { state: (() => { const s = defaultState(); s.chain[1].bypass = false; s.chain[1].dials.mix = 0; s.chain[1].dials.feedback = 0; return s; })() });
     await fx.ready;
     src.connect(fx.input); fx.output.connect(ctx.destination); src.start(0);
     // Port messages reach the render thread asynchronously, so (as in a live app with lookahead)

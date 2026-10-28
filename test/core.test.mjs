@@ -15,7 +15,10 @@ test('wires input -> node -> output once the worklet loads, sending the compiled
   assert.equal(ctx.node.options.processorOptions.program[7], 0.25); // ASTRID chain migrated (wet -> mix)
   assert.equal(ctx.node.options.processorOptions.program[4], 1);
   assert.ok(fx.input.out.has(ctx.node));
-  assert.equal(fx.latencySamples, 72);
+  assert.equal(fx.latencySamples, 0); // limiter off by default
+  assert.equal(ctx.node.options.processorOptions.limiter, 'off');
+  assert.equal(ctx.node.options.processorOptions.preGain, 1);
+  assert.equal(createFxCore(mockContext(), { limiter: 'lookahead' }).latencySamples, 72);
 });
 
 test('setParam clamps, stores, posts DSP units with the audio-clock time, and notifies', async () => {

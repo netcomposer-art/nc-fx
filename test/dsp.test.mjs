@@ -6,7 +6,7 @@ import { SR, noiseBursts, renderDsp, identical, rmsDiff, engine } from './helper
 
 const N = SR; // 1 s
 const [inL, inR] = noiseBursts(N);
-const PURE = { limiter: 'off', preGain: 1 };
+const PURE = {}; // the defaults: limiter off, pre-gain 1
 function prog(edit) { const s = defaultState(); edit(s); return compile(s); }
 const ON = {
   drive: (s) => { s.chain[0].bypass = false; s.chain[0].dials.drive_db = 18; },
@@ -15,7 +15,7 @@ const ON = {
 };
 
 for (const mode of ['hold', 'run']) {
-  test(`${mode}: all bypassed, limiter off, pre-gain 1 is bit-identical to the input`, () => {
+  test(`${mode}: all bypassed with default options is bit-identical to the input (exact unity)`, () => {
     const [oL, oR] = renderDsp(engine(compile(defaultState()), { ...PURE, bypassMode: mode }), inL, inR);
     assert.ok(identical(oL, inL) && identical(oR, inR));
   });
@@ -77,6 +77,14 @@ test('tempo changes and parameter changes land on their frame (sample-accurate)'
   b.setTempo(90, 1024 + 5);
   renderDsp(b, ones.subarray(0, 5), null); assert.equal(b.getTempo(), 120);
   renderDsp(b, ones.subarray(0, 1), null); assert.equal(b.getTempo(), 90);
+});
+
+test('defaults are transparent: no limiter, unity pre-gain, no latency', () => {
+  const loud = new Float32Array(4096).map((_, i) => 3 * Math.sin(i * 0.05));
+  const fx = engine(compile(defaultState()));
+  assert.equal(fx.latencySamples, 0);
+  const [o] = renderDsp(fx, loud, null);
+  assert.ok(identical(o, loud));
 });
 
 test('the lookahead limiter holds the -1 dB ceiling and reports 1.5 ms latency; soft has none', () => {

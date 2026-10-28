@@ -43,7 +43,7 @@ for (const [name, tempo, spec] of CASES) {
     lib.chainSet(chain, astridWidgets(state, tempo), false);
     const aL = new Float32Array(inL.length), aR = new Float32Array(inL.length);
     for (let o = 0; o < inL.length; o += 128) lib.render(chain, inL.subarray(o, o + 128), inR.subarray(o, o + 128), aL.subarray(o, o + 128), aR.subarray(o, o + 128));
-    const fx = createFxDsp(SR, { bypassMode: 'run' }); // ASTRID's bypass, the lookahead limiter, pre-gain 0.8
+    const fx = createFxDsp(SR, { bypassMode: 'run', limiter: 'lookahead', preGain: 0.8 }); // ASTRID's master settings
     fx.setTempo(tempo, 0, true);
     fx.load(compile(state), 0, true);
     const [bL, bR] = renderDsp(fx, inL, inR);

@@ -45,8 +45,9 @@ export function createFxDsp(sampleRate, opts) {
   var o = opts || {};
   var sr = +sampleRate > 0 ? +sampleRate : 48000;
   var hold = o.bypassMode !== 'run';
-  var limMode = o.limiter === 'off' ? 0 : o.limiter === 'soft' ? 2 : 1;
-  var preGain = typeof o.preGain === 'number' && o.preGain >= 0 && o.preGain < 16 ? o.preGain : 0.8;
+  // Transparent by default: limiter off and pre-gain 1, so an all-bypassed chain is bit-identical to its input.
+  var limMode = o.limiter === 'lookahead' ? 1 : o.limiter === 'soft' ? 2 : 0;
+  var preGain = typeof o.preGain === 'number' && o.preGain >= 0 && o.preGain < 16 ? o.preGain : 1;
   var kFast = fxCoef(0.02, sr), kSlow = fxCoef(0.08, sr);
 
   // Shared scratch: IO carries the two samples between stages; T holds bpm, the frame clock and the meter.
