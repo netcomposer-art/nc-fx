@@ -73,6 +73,7 @@ The defaults change nothing you didn't ask for:
 | `preGain` | `1` | Unity gain before the limiter stage. |
 | `bypassMode` | `'run'` | A bypassed effect keeps running, so delay and reverb tails ring out when you bypass it and are still there when you turn it back on, as in ASTRID. `'hold'` opts in to zero CPU while bypassed, at the cost of dropping the tail. |
 | `maxDelaySeconds` | `4.9` | The longest delay (ASTRID's). The delay line is sized from it (about 0.4 MB per second at 48 kHz); up to 60. |
+| `modInput` | `false` | `true` adds `fx.modInput`: a mono input for a control signal (CV, e.g. Bass's accent), channel 0 of whatever you connect. Nothing is routed from it yet, so the sound is the same; per-target depth dials come next. |
 
 **CPU: use `'hold'` if you don't need tails across bypass.** With `'run'` a fully bypassed chain still costs nearly
 everything: in Petra's bench, 78 of 89 µs per 128-frame block. `'run'` is the default only because it is ASTRID's
@@ -224,6 +225,10 @@ const fx = createFxDsp(sampleRate, { limiter: 'soft' });    // allocates everyth
 fx.load(program, 0, true); fx.setTempo(bpm, frame);         // frame = absolute sample frame
 fx.process(inL, inR, outL, outR, 128, currentFrame);        // allocation-free
 ```
+
+An optional 7th argument passes the block's control signal, the same as the node's `modInput`:
+`fx.process(inL, inR, outL, outR, 128, currentFrame, modChannel)`. It needs at least `frames` samples; null or a
+shorter buffer means no mod. Nothing is routed from it yet.
 
 `set`, `setTempo` and `clear(frame?, fadeMs?)` are allocation-free too and return `false` for a frame more than
 600 s ahead. Pass `startFrame: currentFrame` in the options if the engine is created mid-stream. `load()` skips
