@@ -100,7 +100,7 @@ export function mountFxPanel(el, opts) {
       row.appendChild(input);
       row.appendChild(out);
       sec.appendChild(row);
-      controls.push({ type: e.type, key: d.key, input: input, out: out, def: d });
+      controls.push({ type: e.type, key: d.key, input: input, out: out, def: d, row: row });
     });
     root.appendChild(sec);
   });
@@ -114,7 +114,13 @@ export function mountFxPanel(el, opts) {
     }
     if (fromHost && c.input.value !== String(v)) c.input.setAttribute('data-modulated', '');
     if (c.input.value !== String(v)) c.input.value = String(v);
-    c.out.textContent = c.def.format(v, fx.getTempo ? fx.getTempo() : 120);
+    var bpm = fx.getTempo ? fx.getTempo() : 120;
+    c.out.textContent = c.def.format(v, bpm);
+    if (c.def.exact) { if (v > 0) c.row.setAttribute('data-free', ''); else c.row.removeAttribute('data-free'); } // Free time on
+    if (c.def.overriddenBy) { // Timing while Free time is on: dimmed, readout says what plays instead
+      if (fx.getParam(c.type, c.def.overriddenBy) > 0) { c.row.setAttribute('data-overridden', ''); c.out.textContent = 'free time'; }
+      else c.row.removeAttribute('data-overridden');
+    }
   }
   function showHead(type) {
     var hd = heads[type];
@@ -132,7 +138,7 @@ export function mountFxPanel(el, opts) {
     var fromHost = !touching;
     if (!ch || ch.effect === null) { update(fromHost); return; }
     if (ch.key === 'bypass') { showHead(ch.effect); return; }
-    controls.forEach(function (c) { if (c.type === ch.effect && (c.key === ch.key || c.def.stepWhen)) show(c, fromHost); });
+    controls.forEach(function (c) { if (c.type === ch.effect && (c.key === ch.key || c.def.stepWhen || c.def.overriddenBy === ch.key)) show(c, fromHost); });
   });
   update(false);
   el.appendChild(root);
