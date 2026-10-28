@@ -1,13 +1,15 @@
 // nc-fx DSP engine: drive -> delay -> reverb (plate) -> pre-gain -> limiter, in a fixed order.
 // nc-fx was created by Peter Semmelhack (https://psem.me/). MIT License.
 //
-// Pure ES2019 with no imports, so it runs inside any AudioWorkletGlobalScope (dist/worklet.js inlines
-// this file) and in Node. The effects are ported from ASTRID (psemmelhack/NetComposer-Synth 024f200,
+// Pure ES2019; its only import is src/mod.js (same rules), so it runs inside any AudioWorkletGlobalScope
+// (dist/worklet.js inlines both files) and in Node. The effects are ported from ASTRID (psemmelhack/NetComposer-Synth 024f200,
 // lib/synth-audio/src/hacks-vendor/dsp.js, itself netcomposer.art create/hacks/dsp.js @ 3fb61f5):
 // the same arithmetic in the same order, so ASTRID's chain and this one render the same samples
 // (test/astrid-parity.test.mjs). What changed is where state lives: every buffer and every scalar is
 // allocated once, here, in typed arrays. Nothing on the audio path allocates: not process(), not set(),
 // not setTempo(), not a bypass, not a tempo change.
+
+import { createModBus, modBlock } from './mod.js'; // @strip
 
 /** Indexes of the engine's parameters (DSP units, see src/params.js for the dial laws). */
 export var FX_PARAM = {
@@ -70,6 +72,7 @@ export function createFxDsp(sampleRate, opts) {
   T[0] = 120;
   T[1] = o.startFrame > 0 ? Math.round(o.startFrame) : 0; // a worklet passes currentFrame (for the horizon)
   var peak = new Float32Array(2);
+  var MB = createModBus(); // mod bus (src/mod.js): routes and the per-block on flag
   // Each parameter's starting value; PRM = last applied (targets), LV/LF = value and frame of the latest-frame
   // set() so far (load() skips values that wouldn't change anything).
   var START = [0, 0, 0, 1, 0, 0.75, 0.35, 0, 0, 0, 0.5, 0.5, 0, 0];
@@ -607,8 +610,11 @@ export function createFxDsp(sampleRate, opts) {
      * Render `frames` samples. inR null = mono in (R = L). outR null = mono out (left only).
      * blockFrame is the absolute frame of sample 0 (AudioWorklet `currentFrame`); omitted = continues.
      */
-    process: function (inL, inR, outL, outR, frames, blockFrame) {
+    process: function (inL, inR, outL, outR, frames, blockFrame, mod) {
       var start = blockFrame === undefined || blockFrame === null ? T[1] : +blockFrame;
+      // Mod bus (src/mod.js): off unless a mod buffer covers the block and a route has depth. No route has one
+      // yet, so this is the only mod work, once per block, and the render below is the same code as before.
+      modBlock(MB, mod, frames);
       T[2] = 0; T[3] = 0;
       admit(); // keeps admit() hot (optimised) even when events are rare; the slot is normally empty
       var i = 0;

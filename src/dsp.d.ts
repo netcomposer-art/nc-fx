@@ -41,7 +41,11 @@ export interface FxDsp {
    * Neither touches the limiter.
    */
   clear(frame?: number, fadeMs?: number): boolean;
-  /** inR null = mono in; outR null = mono out. blockFrame = AudioWorklet currentFrame. Allocation-free. */
-  process(inL: Float32Array | null, inR: Float32Array | null, outL: Float32Array, outR: Float32Array | null, frames: number, blockFrame?: number): void;
+  /**
+   * inR null = mono in; outR null = mono out. blockFrame = AudioWorklet currentFrame. Allocation-free.
+   * `mod`: optional control signal for the block (the mod input's channel 0, e.g. Bass's accent CV), at least
+   * `frames` long; shorter, null or omitted means no mod. Nothing is routed from it yet: the output is the same.
+   */
+  process(inL: Float32Array | null, inR: Float32Array | null, outL: Float32Array, outR: Float32Array | null, frames: number, blockFrame?: number, mod?: Float32Array | null): void;
 }
 export function createFxDsp(sampleRate: number, opts?: FxDspOptions): FxDsp;
