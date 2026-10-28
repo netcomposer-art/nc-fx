@@ -67,3 +67,7 @@ After the first merge (main 3242a05), toward what Bass still needs (design appro
   0.1 dB steps (`stepWhen` in describeParams) so Bass's amounts round-trip within 0.0065; Smooth keeps whole dB, and
   `setParam('drive', 'curve', 0)` re-rounds it (posted and notified). At the defaults the engine runs the old code:
   ASTRID parity is bit-identical and old states load unchanged.
+  After Zeta's review of PR B: with depths set, no CV (or one shorter than the block) is read as a silent CV, so it
+  sounds exactly like a connected but silent `modInput` (the depths were zeroed instead, which skipped the mod paths);
+  a NaN or infinite CV sample counts as 0, like the audio input (one could stick in the tone low-pass and everything
+  after it until `clear()`); `load()` of a shorter program fills the remaining indexes with their defaults.

@@ -252,7 +252,8 @@ fx.process(inL, inR, outL, outR, 128, currentFrame);        // allocation-free
 
 An optional 7th argument passes the block's control signal, the same as the node's `modInput`:
 `fx.process(inL, inR, outL, outR, 128, currentFrame, modChannel)`. It needs at least `frames` samples; null or a
-shorter buffer means no mod. The depths are the drive's `mod_drive` / `mod_tone` dials (indexes 16, 17).
+shorter buffer is read as a silent CV (all zeros), so it sounds exactly like a connected but silent input. A NaN or
+infinite CV sample counts as 0. The depths are the drive's `mod_drive` / `mod_tone` dials (indexes 16, 17).
 
 `set`, `setTempo` and `clear(frame?, fadeMs?)` are allocation-free too and return `false` for a frame more than
 600 s ahead. Pass `startFrame: currentFrame` in the options if the engine is created mid-stream. `load()` skips
