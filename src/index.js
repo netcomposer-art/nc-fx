@@ -7,11 +7,14 @@
 
 import {
   EFFECTS, EFFECT_ORDER, STATE_VERSION, effectType, dialDef, clampDial, dialToDsp, PARAM_INDEX,
-  sanitize, migrate, compile, cloneState, defaultState, delaySeconds
+  sanitize, migrate, compile, cloneState, defaultState, delaySeconds, describeParams, FORMATS
 } from './params.js';
 
-export { EFFECTS, EFFECT_ORDER, STATE_VERSION, sanitize, migrate, defaultState, delaySeconds };
+export { EFFECTS, EFFECT_ORDER, STATE_VERSION, sanitize, migrate, defaultState, delaySeconds, compile, dialToDsp, describeParams, FORMATS };
 export var PROCESSOR_NAME = 'nc-fx@1';
+
+var HORIZON_S = 600; // seconds ahead of ctx.currentTime a timed call may be (the engine refuses more)
+var PENDING_MAX = 256; // calls queued before the worklet is ready
 
 var loads = typeof WeakMap === 'function' ? new WeakMap() : null;
 
@@ -57,6 +60,7 @@ export function createFxCore(ctx, opts) {
   var bypassMode = o.bypassMode === 'hold' ? 'hold' : 'run'; // default 'run': tails ring out
   var preGain = finiteOr(o.preGain, 1); // opt-in (ASTRID: 0.8)
   var fade = Math.max(0, finiteOr(o.crossfade, 0.012));
+  var maxDelaySeconds = finiteOr(o.maxDelaySeconds, undefined);
   var input = ctx.createGain(), output = ctx.createGain(), dry = ctx.createGain(), wet = ctx.createGain();
   wet.gain.value = 0;
   input.connect(dry);
@@ -67,7 +71,11 @@ export function createFxCore(ctx, opts) {
 
   function post(msg) {
     if (node) node.port.postMessage(msg);
-    else if (!disposed) pending.push(msg);
+    else if (!disposed) {
+      // Capped: past PENDING_MAX the queue folds into one load of the current state plus the tempo (now).
+      if (pending.length >= PENDING_MAX) pending = [{ t: 'load', program: Array.from(compile(state)), when: 0 }, { t: 'tempo', bpm: bpm, when: 0 }];
+      pending.push(msg);
+    }
   }
   // Pending calls whose time has passed (or that had none) become 'now' and snap; future ones keep their time.
   function takePending(now) {
@@ -85,6 +93,18 @@ export function createFxCore(ctx, opts) {
     }
   }
   function whenOf(at) { return typeof at === 'number' && isFinite(at) && at > 0 ? at : 0; }
+  // A time more than HORIZON_S past ctx.currentTime is almost always on the wrong clock (epoch seconds from
+  // nc-clock's timeAt() without toContextTime()). Refuse it, once with a warning, and change nothing.
+  var warned = false;
+  function tooFar(at) {
+    if (!(typeof at === 'number' && at > ctx.currentTime + HORIZON_S)) return false;
+    if (!warned && typeof console !== 'undefined') {
+      warned = true;
+      console.warn('nc-fx: ignoring a time ' + Math.round(at - ctx.currentTime) + ' s ahead of AudioContext time; ' +
+        'convert clock times with toContextTime() (see followClock)');
+    }
+    return true;
+  }
 
   var ready = loadFxWorklet(ctx, o.moduleUrl).then(function () {
     if (disposed) return;
@@ -93,6 +113,7 @@ export function createFxCore(ctx, opts) {
       channelCount: 2, channelCountMode: 'explicit', channelInterpretation: 'speakers',
       processorOptions: {
         program: startProgram, bpm: startBpm, bypassMode: bypassMode, limiter: limiter, preGain: preGain,
+        maxDelaySeconds: maxDelaySeconds,
         pending: takePending(ctx.currentTime)
       }
     });
@@ -125,11 +146,12 @@ export function createFxCore(ctx, opts) {
     latencySamples: limiter === 'lookahead' ? Math.max(1, Math.round(0.0015 * ctx.sampleRate)) : 0,
     /**
      * Set one dial (UI units) or 'bypass' (boolean). `at` = AudioContext time; omitted = now.
-     * Returns the value actually stored (clamped / snapped), or undefined for an unknown effect or dial.
+     * Returns the value actually stored (clamped / snapped), or undefined for an unknown effect or dial, or
+     * for a time more than 600 s ahead (refused: see tooFar).
      */
     setParam: function (effect, key, value, at) {
       var type = effectType(effect);
-      if (!type || disposed) return undefined;
+      if (!type || disposed || tooFar(at)) return undefined;
       var slot = slotOf(type), v;
       if (key === 'bypass') v = !!value;
       else {
@@ -152,22 +174,31 @@ export function createFxCore(ctx, opts) {
     getState: function () { return cloneState(state); },
     /** Load any saved state (nc-fx v1 or ASTRID's hacks array; see migrate()). */
     setState: function (s, setOpts) {
-      if (disposed) return;
+      if (disposed || tooFar(setOpts && setOpts.at)) return;
       state = sanitize(s);
       post({ t: 'load', program: Array.from(compile(state)), when: whenOf(setOpts && setOpts.at) });
       emit({ effect: null, key: null, value: null });
     },
-    /** Host tempo (BPM) for the synced delay, optionally at an AudioContext time. */
+    /** Host tempo (BPM) for the synced delay, optionally at an AudioContext time (at most 600 s ahead). */
     setTempo: function (nextBpm, at) {
       var b = finiteOr(nextBpm, NaN);
-      if (!(b > 0) || disposed) return;
+      if (!(b > 0) || disposed || tooFar(at)) return;
       bpm = Math.min(400, Math.max(20, b));
       post({ t: 'tempo', bpm: bpm, when: whenOf(at) });
       emit({ effect: null, key: 'tempo', value: bpm });
     },
     getTempo: function () { return bpm; },
-    /** Panic: drop every tail now (or at an AudioContext time). */
-    clear: function (at) { post({ t: 'clear', when: whenOf(at) }); },
+    /**
+     * Panic: drop the delay and reverb tails now, or at an AudioContext time: clear(at) or clear({at, fadeMs}).
+     * fadeMs > 0 (max 1000) ramps the wet down first and back in after (no click). The instant clear also
+     * resets the drive's one-sample state; neither resets the limiter.
+     */
+    clear: function (at) {
+      var c = at && typeof at === 'object' ? at : { at: at };
+      if (disposed || tooFar(c.at)) return;
+      var fadeMs = finiteOr(c.fadeMs, 0);
+      post({ t: 'clear', when: whenOf(c.at), fadeMs: fadeMs > 0 ? Math.min(1000, fadeMs) : 0 });
+    },
     /** Called after every change with {effect, key, value} (effect null for whole-state or tempo changes). */
     onChange: function (cb) {
       listeners.push(cb);
@@ -194,15 +225,17 @@ export function createFxCore(ctx, opts) {
  */
 export function createFx(ctx, opts) {
   var fx = createFxCore(ctx, opts);
-  var panels = [];
+  var panels = [], disposed = false;
   var dispose = fx.dispose;
+  // If dispose() ran while ./ui.js loaded, the panel is destroyed before it resolves (same frame: never
+  // painted, nothing left listening), so a late mount can't leak.
   fx.mount = function (el, uiOpts) {
     return import('./ui.js').then(function (m) {
       var p = m.mountFxPanel(el, Object.assign({}, uiOpts, { fx: fx }));
-      panels.push(p);
+      if (disposed) p.destroy(); else panels.push(p);
       return p;
     });
   };
-  fx.dispose = function () { panels.splice(0).forEach(function (p) { p.destroy(); }); dispose(); };
+  fx.dispose = function () { disposed = true; panels.splice(0).forEach(function (p) { p.destroy(); }); dispose(); };
   return fx;
 }

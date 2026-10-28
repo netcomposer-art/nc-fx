@@ -63,7 +63,9 @@ test('getState/setState round-trip as JSON; setTempo and clear post on the audio
   fx.setTempo(NaN);
   assert.equal(fx.getTempo(), 400);
   fx.clear(3);
-  assert.deepEqual(ctx.posted.at(-1), { t: 'clear', when: 3 });
+  assert.deepEqual(ctx.posted.at(-1), { t: 'clear', when: 3, fadeMs: 0 });
+  fx.clear({ at: 3, fadeMs: 5000 });
+  assert.deepEqual(ctx.posted.at(-1), { t: 'clear', when: 3, fadeMs: 1000 });
 });
 
 test('crossfades from the wire to the chain on the audio clock when the context is running', async () => {
@@ -134,4 +136,27 @@ test('a queue built before ready is dropped on dispose or when the worklet is un
   fx2.dispose();
   await fx2.ready;
   assert.equal(ctx2.node, undefined);
+});
+
+test('the pre-ready queue is capped: past 256 calls it folds into the current state plus tempo', async () => {
+  const ctx = mockContext({ currentTime: 0 });
+  const fx = createFxCore(ctx, { moduleUrl: '/w.js', bpm: 120 });
+  for (let k = 0; k < 1000; k++) fx.setParam('delay', 'mix', k % 101, 5 + k / 100);
+  fx.setTempo(133);
+  await fx.ready;
+  const po = ctx.node.options.processorOptions;
+  assert.ok(po.pending.length <= 257, `${po.pending.length} queued`);
+  const fold = po.pending.findLast((m) => m.t === 'load');
+  assert.ok(fold, 'folded into a load');
+  assert.equal(po.pending.findLast((m) => m.t === 'tempo').bpm, 133);
+  assert.equal(fx.getParam('delay', 'mix'), 999 % 101);
+});
+
+test('maxDelaySeconds reaches the processor; compile, dialToDsp and describeParams are exported', async () => {
+  const ctx = mockContext();
+  const fx = createFxCore(ctx, { moduleUrl: '/w.js', maxDelaySeconds: 8 });
+  await fx.ready;
+  assert.equal(ctx.node.options.processorOptions.maxDelaySeconds, 8);
+  const m = await import('../src/index.js');
+  for (const k of ['compile', 'dialToDsp', 'describeParams', 'FORMATS']) assert.equal(typeof m[k] === 'function' || typeof m[k] === 'object', true, k);
 });

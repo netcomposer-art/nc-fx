@@ -104,6 +104,12 @@ async function main() {
     check('readout follows the tempo', document.querySelector('[data-testid="nc-fx-delay"] output').textContent === '500 ms');
     panel.destroy();
     check('destroy removes the panel', !document.querySelector('.nc-fx'));
+    // dispose() while mount() is still loading the panel: nothing is left in the page or listening.
+    const fx2 = createFx(ctx);
+    const pending = fx2.mount(document.getElementById('panel'));
+    fx2.dispose();
+    const late = await pending;
+    check('dispose during mount leaves no panel', !document.querySelector('.nc-fx') && !!late && typeof late.destroy === 'function');
   }
 }
 

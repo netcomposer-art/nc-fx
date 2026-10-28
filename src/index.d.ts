@@ -1,7 +1,9 @@
 import type { FxState, FxEffectName, FxEffectType, FxEffectDef } from './params.js';
 import type { FxPanel, FxPanelOptions } from './ui.js';
-export type { FxState, FxSlot, FxEffectName, FxEffectType, FxEffectDef, FxDialDef } from './params.js';
-export { EFFECTS, EFFECT_ORDER, STATE_VERSION, sanitize, migrate, defaultState, delaySeconds } from './params.js';
+export type { FxState, FxSlot, FxEffectName, FxEffectType, FxEffectDef, FxDialDef, FxParamInfo } from './params.js';
+export {
+  EFFECTS, EFFECT_ORDER, STATE_VERSION, sanitize, migrate, defaultState, delaySeconds, compile, dialToDsp, describeParams, FORMATS
+} from './params.js';
 
 export const PROCESSOR_NAME: 'nc-fx@1';
 
@@ -20,6 +22,8 @@ export interface FxCoreOptions {
   preGain?: number;
   /** Seconds for the wire -> chain crossfade when the worklet arrives. Default 0.012. */
   crossfade?: number;
+  /** Longest delay time in seconds; sizes the delay line (~0.4 MB per second at 48 kHz). Default 4.9, max 60. */
+  maxDelaySeconds?: number;
 }
 export interface FxChange { effect: FxEffectType | null; key: string | null; value: number | boolean | null }
 
@@ -31,7 +35,9 @@ export interface FxCore {
   /**
    * setParam / setState / setTempo / clear called before `ready` are queued in call order and replayed when the
    * worklet starts: a future `at` is applied exactly; a past or omitted one is clamped to now. They never change
-   * the starting state (that is `opts.state` / `opts.bpm` at construction).
+   * the starting state (that is `opts.state` / `opts.bpm` at construction). Past 256 queued calls the queue
+   * folds into one load of the current state plus the tempo, applied when the worklet starts.
+   * A time more than 600 s ahead of ctx.currentTime (a time on the wrong clock) is refused with one warning.
    */
   readonly status: 'loading' | 'ready' | 'unavailable' | 'disposed';
   readonly error: unknown;
@@ -43,12 +49,13 @@ export interface FxCore {
   setState(state: unknown, opts?: { at?: number }): void;
   setTempo(bpm: number, at?: number): void;
   getTempo(): number;
-  clear(at?: number): void;
+  /** Drop the delay and reverb tails. fadeMs > 0 (max 1000) fades the wet out and back in. Not the limiter. */
+  clear(at?: number | { at?: number; fadeMs?: number }): void;
   onChange(cb: (change: FxChange) => void): () => void;
   dispose(): void;
 }
 export interface Fx extends FxCore {
-  /** Lazy-loads the panel and renders it into el. */
+  /** Lazy-loads the panel and renders it into el. If dispose() ran meanwhile, the panel comes back destroyed. */
   mount(el: HTMLElement, opts?: Omit<FxPanelOptions, 'fx'>): Promise<FxPanel>;
 }
 

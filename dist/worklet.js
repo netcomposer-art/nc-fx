@@ -627,7 +627,9 @@ class NcFxProcessor extends AudioWorkletProcessor {
   constructor(options) {
     super();
     var po = (options && options.processorOptions) || {};
-    this.dsp = createFxDsp(sampleRate, { bypassMode: po.bypassMode, limiter: po.limiter, preGain: po.preGain });
+    this.dsp = createFxDsp(sampleRate, {
+      bypassMode: po.bypassMode, limiter: po.limiter, preGain: po.preGain, maxDelaySeconds: po.maxDelaySeconds, startFrame: currentFrame
+    });
     if (typeof po.bpm === 'number') this.dsp.setTempo(po.bpm, 0, true);
     if (po.program) this.dsp.load(po.program, 0, true);
     this.alive = true;
@@ -661,7 +663,7 @@ class NcFxProcessor extends AudioWorkletProcessor {
       case 'p': d.set(m.i, m.v, frame, snap); break;
       case 'load': if (m.program) d.load(m.program, frame, snap); break;
       case 'tempo': d.setTempo(m.bpm, frame, snap); break;
-      case 'clear': d.clear(frame); break;
+      case 'clear': d.clear(frame, m.fadeMs); break;
     }
   }
   process(inputs, outputs) {
