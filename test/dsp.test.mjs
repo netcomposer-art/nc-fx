@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { FX_PARAM as P, FX_NPARAMS } from '../src/dsp.js';
+import { FX_PARAM as P, FX_NPARAMS, createFxDsp } from '../src/dsp.js';
 import { compile, defaultState } from '../src/params.js';
 import { SR, noiseBursts, renderDsp, identical, rmsDiff, engine } from './helpers.mjs';
 
@@ -138,4 +138,80 @@ test('clear() drops every tail; get() reports applied values; bad values are ign
   fx.set(P.DELAY_FEEDBACK, NaN); assert.equal(fx.get(P.DELAY_FEEDBACK), 0.9);
   fx.set(99, 1); fx.set(-5, 1);
   assert.equal(FX_NPARAMS, 14);
+});
+
+// ---- Review fixes (Zeta, Petra)
+const DELAY_ONLY = () => prog((s) => { s.chain[1].bypass = false; s.chain[1].dials.mix = 50; s.chain[1].dials.feedback = 60; });
+function tailEnergy(fx, blocks) { const z = new Float32Array(128), oL = new Float32Array(128); let e = 0; for (let b = 0; b < blocks; b++) { fx.process(z, z, oL, null, 128); for (const x of oL) e += x * x; } return e; }
+
+test('frames more than 600 s ahead are refused (false), so epoch seconds as audio time can\'t queue', () => {
+  const fx = engine(compile(defaultState()));
+  assert.equal(fx.setTempo(90, 1793171004.86 * SR), false);
+  assert.equal(fx.set(P.DELAY_MIX, 0.9, 601 * SR), false);
+  assert.equal(fx.set(P.DELAY_MIX, 0.9, 599 * SR), true);
+  renderDsp(fx, new Float32Array(1280), null);
+  assert.equal(fx.getTempo(), 120);
+});
+
+test('a full queue applies its earliest events early instead of dropping any', () => {
+  const fx = engine(compile(defaultState()));
+  for (let k = 0; k < 300; k++) assert.equal(fx.setTempo(100 + k * 0.1, 1000 + k), true);
+  assert.equal(fx.getTempo(), 100 + 43 * 0.1); // 256 queued, the 44 earliest applied early
+  renderDsp(fx, new Float32Array(1408), null);
+  assert.equal(fx.getTempo(), 100 + 299 * 0.1);
+});
+
+test('load() skips values that are already scheduled, unless snap', () => {
+  const fx = engine(compile(defaultState()));
+  const p = compile(defaultState()); p[P.DELAY_MIX] = 0.7;
+  fx.set(P.DELAY_MIX, 0.2, 5000);
+  fx.load(p, 1000);                 // 0.7 at 1000 is older than the 0.2 at 5000: still queued, 0.2 wins
+  renderDsp(fx, new Float32Array(6400), null);
+  assert.equal(fx.get(P.DELAY_MIX), 0.2);
+  fx.load(p); assert.equal(fx.get(P.DELAY_MIX), 0.7);
+});
+
+test('clear() with the lookahead limiter keeps the dry signal (no 72-sample hole)', () => {
+  const fx = engine(compile(defaultState()), { limiter: 'lookahead' });
+  const x = new Float32Array(4800).fill(0.25), oL = new Float32Array(128);
+  let zeros = 0;
+  for (let o = 0; o < x.length; o += 128) { if (o === 2560) fx.clear(); fx.process(x.subarray(o, o + 128), null, oL, null, 128); if (o >= 1280) for (const v of oL) if (v === 0) zeros++; }
+  assert.equal(zeros, 0);
+});
+
+test('clear(frame, fadeMs) fades the tail out and back in without a step; instant clear still drops it', () => {
+  const run = (fade) => {
+    const fx = engine(DELAY_ONLY());
+    const [nl, nr] = noiseBursts(19200); // 0.4 s: the first echo (0.375-0.4375 s) is sounding
+    renderDsp(fx, nl, nr);
+    if (fade >= 0) fx.clear(undefined, fade);
+    const z = new Float32Array(128), oL = new Float32Array(128), out = [];
+    for (let b = 0; b < 200; b++) { fx.process(z, z, oL, null, 128); out.push(...oL); }
+    return { out, after: tailEnergy(fx, 100) };
+  };
+  const ref = run(-1), inst = run(0), fade = run(5);
+  assert.ok(ref.after > 0);
+  assert.equal(inst.after, 0);
+  assert.ok(inst.out.every((v) => v === 0));
+  assert.equal(fade.after, 0);
+  let err = 0; // 5 ms = 240 samples: the wet ramps linearly to 0
+  for (let i = 0; i < 240; i++) err = Math.max(err, Math.abs(fade.out[i] - ref.out[i] * (1 - (i + 1) / 240)));
+  assert.ok(err < 1e-6, `ramp error ${err}`);
+  assert.ok(Math.abs(fade.out[0]) > 0.05, 'the fade starts from the tail');
+  assert.ok(fade.out.slice(240).every((v) => v === 0), 'silent once faded');
+});
+
+test('maxDelaySeconds sizes the delay line and caps the delay time', () => {
+  const echoAt = (opts, beats, bpm) => {
+    const fx = createFxDsp(SR, opts);
+    const p = DELAY_ONLY(); p[P.DELAY_BEATS] = beats; p[P.DELAY_FEEDBACK] = 0;
+    fx.setTempo(bpm, 0, true); fx.load(p, 0, true);
+    const x = new Float32Array(SR * 12); x[0] = 1;
+    const [o] = renderDsp(fx, x, null);
+    let at = -1; for (let i = 1; i < o.length; i++) if (Math.abs(o[i]) > 0.1) { at = i; break; }
+    return at / SR;
+  };
+  assert.ok(Math.abs(echoAt({}, 8, 60) - 4.9) < 0.002);               // ASTRID's 4.9 s cap
+  assert.ok(Math.abs(echoAt({ maxDelaySeconds: 10 }, 8, 60) - 8) < 0.002);
+  assert.ok(Math.abs(echoAt({ maxDelaySeconds: 1 }, 2, 60) - 1) < 0.002);
 });

@@ -32,7 +32,10 @@ var CEILING = 0.8912509381337456;
 var BW = 0.9995;
 var MAX_DELAY_S = 4.9;
 var QUEUE = 256;
+var NO_EVENT = -99; // empty staging slot
 var CLEAR_CHUNK = 4096;
+var SNAP_EPS = 1e-30; // smoothers snap onto their target this close: only a 0 target gets here, long before subnormals (2.2e-308)
+var HORIZON_S = 600; // events further ahead than this are refused
 // Dattorro's line lengths at FS (0 is the pre-delay, sized separately).
 var PLATE_PAPER = [0, 142, 107, 379, 277, 672, 908, 4453, 4217, 1800, 2656, 3720, 3163];
 var L_PRE = 0, L_IN = 1, L_AP1 = 5, L_D1 = 7, L_AP2 = 9, L_D2 = 11, N_LINES = 13;
@@ -53,20 +56,29 @@ function createFxDsp(sampleRate, opts) {
   var limMode = o.limiter === 'lookahead' ? 1 : o.limiter === 'soft' ? 2 : 0;
   var preGain = typeof o.preGain === 'number' && o.preGain >= 0 && o.preGain < 16 ? o.preGain : 1;
   var kFast = fxCoef(0.02, sr), kSlow = fxCoef(0.08, sr);
+  // Longest delay (the delay line is sized from it). Default 4.9 s, ASTRID's.
+  var maxDelay = typeof o.maxDelaySeconds === 'number' && o.maxDelaySeconds > 0 ? (o.maxDelaySeconds < 60 ? o.maxDelaySeconds : 60) : MAX_DELAY_S;
+  var horizon = Math.round(HORIZON_S * sr);
 
   // Shared scratch: IO carries the two samples between stages; T holds bpm, the frame clock and the meter.
   var IO = new Float64Array(2);
-  var T = new Float64Array(6); // 0 bpm, 1 next frame, 2 peakL, 3 peakR, 4 frame argument, 5 value argument
+  var T = new Float64Array(5); // 0 bpm, 1 next frame, 2 peakL, 3 peakR, 4 due-up-to frame
   T[0] = 120;
+  T[1] = o.startFrame > 0 ? Math.round(o.startFrame) : 0; // a worklet passes currentFrame (for the horizon)
   var peak = new Float32Array(2);
-  var PRM = new Float64Array(FX_NPARAMS); // last applied DSP values (targets)
+  // Each parameter's starting value; PRM = last applied (targets), LV/LF = value and frame of the latest-frame
+  // set() so far (load() skips values that wouldn't change anything).
+  var START = [0, 0, 0, 1, 0, 0.75, 0.35, 0, 0, 0, 0.5, 0.5, 0, 0];
+  var PRM = new Float64Array(START), LV = new Float64Array(START), LF = new Float64Array(FX_NPARAMS);
+  var FC = new Float64Array(6); // clear({fadeMs}) state, see fadeClearSome()
+  FC[1] = 1;
 
   // ---- Drive (ncDrive*: tanh with first-order antiderivative antialiasing, level kept at -12 dBFS)
   var DR = new Float64Array(12); // 0 u0, 1 u1, 2 f0, 3 f1, 4 driveS, 5 driveT, 6 outS, 7 outT, 8 mixS, 9 mixT, 10 on, 11 onT
   DR[8] = 1; DR[9] = 1;
 
   // ---- Delay (ncDelay*: one stereo tap, linear interpolation, equal-power wet/dry)
-  var dn = Math.ceil(MAX_DELAY_S * sr) + 8;
+  var dn = Math.ceil(maxDelay * sr) + 8;
   var dBufL = new Float32Array(dn), dBufR = new Float32Array(dn);
   var DL = new Float64Array(12); // 0 w, 1 dlyS, 2 dlyT, 3 fbS, 4 fbT, 5 wetS, 6 wetT, 7 on, 8 onT, 9 beats, 10 clearPos, 11 sleep (0 awake, 1 clearing, 2 clear)
   DL[1] = 0.75 * sr; DL[2] = 0.75 * sr; DL[3] = 0.35; DL[4] = 0.35; DL[9] = 0.75;
@@ -99,8 +111,10 @@ function createFxDsp(sampleRate, opts) {
   limReset();
 
   // ---- Event queue: sample-accurate parameter and tempo changes, sorted by frame
-  var EF = new Float64Array(QUEUE), EI = new Int32Array(QUEUE), EV = new Float64Array(QUEUE);
-  var ES = new Uint8Array(QUEUE); // 1 = snap (no smoothing) when it lands
+  // Slot QUEUE stages the incoming event (see admit()).
+  var EF = new Float64Array(QUEUE + 1), EI = new Int32Array(QUEUE + 1), EV = new Float64Array(QUEUE + 1);
+  var ES = new Uint8Array(QUEUE + 1); // 1 = snap (no smoothing) when it lands
+  EI[QUEUE] = NO_EVENT;
   var EN = new Int32Array(1);
 
   // Hot-path helpers never take or return a double (see S below); the tiny formulas are written in place.
@@ -166,31 +180,15 @@ function createFxDsp(sampleRate, opts) {
     S[1] = d;
   }
 
-  /** Delay target in samples from beats and tempo, into DL[2]. */
-  function delayTarget() {
-    var bpm = T[0];
-    var s = Math.min(MAX_DELAY_S, DL[9] * 60 / (bpm > 0 ? bpm : 120));
-    s = Math.round(s * 1e4) / 1e4; // hacks.ts: +delayS(beats, tempo).toFixed(4), without making a string
-    if (!(s > 0)) s = 0;
-    if (s > MAX_DELAY_S) s = MAX_DELAY_S;
-    var samples = s * sr;
-    if (samples < 1) samples = 1;
-    var max = dn - 4;
-    if (samples > max) samples = max;
-    DL[2] = samples;
-  }
-  /** Clamp the value argument T[5] into [lo, hi]. False (and nothing changes) when it is not a number. */
-  function clampArg(lo, hi) {
-    var x = T[5];
-    if (x !== x) return false;
-    T[5] = x < lo ? lo : x > hi ? hi : x;
-    return true;
-  }
   function clearDrive() { DR[0] = 0; DR[1] = 0; DR[2] = 0; DR[3] = 0; }
   function clearDelay() { dBufL.fill(0); dBufR.fill(0); DL[0] = 0; DL[10] = 0; }
-  function clearPlate() {
-    for (var i = 0; i < N_LINES; i++) { PB[i].fill(0); PW[i] = 0; }
+  function clearPlateState() {
+    for (var i = 0; i < N_LINES; i++) PW[i] = 0;
     PL[12] = 0; PL[13] = 0; PL[14] = 0; PL[15] = 0; PL[16] = 0; PL[17] = 0; PL[18] = 0; PL[19] = 0;
+  }
+  function clearPlate() {
+    for (var i = 0; i < N_LINES; i++) PB[i].fill(0);
+    clearPlateState();
   }
   // 'hold' bypass clears tails a piece per block while an effect sleeps, so no block pays for a big fill.
   function clearSome() {
@@ -212,59 +210,136 @@ function createFxDsp(sampleRate, opts) {
       } else PL[19] = end;
     }
   }
-
-  /** Apply event i with its value in T[5] (doubles never cross a call boundary on the audio path). */
-  function apply(i, snap) {
-    var on, v = T[5];
-    if (i === EV_TEMPO) {
-      if (!clampArg(20, 400)) return;
-      T[0] = T[5];
-      delayTarget();
-      if (snap) DL[1] = DL[2];
-      return;
+  // clear({fadeMs}): FC 0 phase (0 off, 1 fading out, 2 clearing, 3 fading in), 1 wet gain, 2 gain step per
+  // sample, 3 delay position, 4 plate line, 5 plate position. While the gain is 0 nothing goes in or out of
+  // the delay and the plate, and their lines are zeroed CLEAR_CHUNK samples per block.
+  function fadeClearSome() {
+    var left = CLEAR_CHUNK, end = FC[3] + CLEAR_CHUNK;
+    if (FC[3] < dn) {
+      if (end > dn) end = dn;
+      dBufL.fill(0, FC[3], end); dBufR.fill(0, FC[3], end);
+      left -= end - FC[3];
+      FC[3] = end;
     }
-    if (i === EV_CLEAR) { clearAll(); return; }
-    if (i < 0 || i >= FX_NPARAMS) return;
-    switch (i) {
-      case 0: on = v ? 1 : 0; if (on && DR[11] === 0) clearDrive(); DR[11] = on; if (snap) DR[10] = on; break;
-      case 1: if (!clampArg(0, 24)) return; DR[5] = T[5]; if (snap) DR[4] = DR[5]; break;
-      case 2: if (!clampArg(-12, 12)) return; DR[7] = T[5]; if (snap) DR[6] = DR[7]; break;
-      case 3: if (!clampArg(0, 1)) return; DR[9] = T[5]; if (snap) DR[8] = DR[9]; break;
-      case 4: on = v ? 1 : 0; if (on) { if (DL[11] === 1) clearDelay(); DL[11] = 0; } DL[8] = on; if (snap) DL[7] = on; break;
-      case 5: if (!clampArg(0.0625, 8)) return; DL[9] = T[5]; delayTarget(); if (snap) DL[1] = DL[2]; break;
-      case 6: if (!clampArg(0, 0.9)) return; DL[4] = T[5]; if (snap) DL[3] = DL[4]; break;
-      case 7: if (!clampArg(0, 1)) return; DL[6] = T[5]; if (snap) DL[5] = DL[6]; break;
-      case 8: on = v ? 1 : 0; if (on) { if (PL[20] === 1) clearPlate(); PL[20] = 0; } PL[11] = on; if (snap) PL[10] = on; break;
-      case 9: if (!clampArg(0, 0.2)) return; PL[1] = T[5]; if (snap) PL[0] = PL[1]; break;
-      case 10: if (!clampArg(0, 1)) return; PL[3] = T[5]; if (snap) PL[2] = PL[3]; break;
-      case 11: if (!clampArg(0, 1)) return; PL[5] = T[5]; if (snap) PL[4] = PL[5]; break;
-      case 12: if (!clampArg(0, 1)) return; PL[7] = T[5]; if (snap) PL[6] = PL[7]; break;
-      case 13: if (!clampArg(0, 1)) return; PL[9] = T[5]; if (snap) PL[8] = PL[9]; break;
+    while (left > 0 && FC[4] < N_LINES) {
+      var li = FC[4], pos = FC[5], n = PN[li];
+      end = pos + left;
+      if (end > n) end = n;
+      PB[li].fill(0, pos, end);
+      left -= end - pos;
+      if (end >= n) { FC[4] = li + 1; FC[5] = 0; } else FC[5] = end;
     }
-    PRM[i] = (i & 3) === 0 && i < 12 ? (v ? 1 : 0) : T[5];
+    if (FC[3] >= dn && FC[4] >= N_LINES) { DL[0] = 0; clearPlateState(); FC[0] = 3; }
   }
+  /** The instant clear: delay and plate tails and the drive's one-sample state. The limiter is left alone. */
   function clearAll() {
-    clearDrive(); clearDelay(); clearPlate(); limReset();
+    clearDrive(); clearDelay(); clearPlate();
+    FC[0] = 0; FC[1] = 1;
   }
-  // Full queue: the oldest event is applied early rather than dropped.
-  function enqueue(i, v, frame, snap) {
+  // Events: the API stages one event in slot QUEUE (EI/EV/EF/ES) and calls admit(), which process() also calls
+  // every block, so admit() runs optimised and the cold API never reads a double (a cold read boxes it).
+  // Sorted by frame; equal frames keep call order. A full queue applies its earliest frame's events early
+  // (the smallest timing error), never drops one; frames beyond the horizon are refused, so junk can't fill it.
+  function admit() {
+    var i = EI[QUEUE];
+    if (i === NO_EVENT) return true;
+    EI[QUEUE] = NO_EVENT;
+    var v = EV[QUEUE], f = EF[QUEUE], mode = ES[QUEUE], now = !(f > T[1]);
+    f = now ? T[1] : Math.round(f);
+    if (f - T[1] > horizon) return false;
+    if (i >= 0) {
+      if (mode === 2 && v === LV[i] && f >= LF[i]) return true; // load(): unchanged
+      if (f >= LF[i]) { LF[i] = f; LV[i] = v; }
+    }
     var n = EN[0];
-    if (n >= QUEUE) { T[5] = EV[0]; apply(EI[0], ES[0] === 1); for (var s = 1; s < n; s++) { EF[s - 1] = EF[s]; EI[s - 1] = EI[s]; EV[s - 1] = EV[s]; ES[s - 1] = ES[s]; } n--; }
+    if (n >= QUEUE) { T[4] = EF[0]; due(); n = EN[0]; }
     var j = n;
-    while (j > 0 && EF[j - 1] > frame) { EF[j] = EF[j - 1]; EI[j] = EI[j - 1]; EV[j] = EV[j - 1]; ES[j] = ES[j - 1]; j--; }
-    EF[j] = frame; EI[j] = i; EV[j] = v; ES[j] = snap ? 1 : 0;
+    while (j > 0 && EF[j - 1] > f) { EF[j] = EF[j - 1]; EV[j] = EV[j - 1]; EI[j] = EI[j - 1]; ES[j] = ES[j - 1]; j--; }
+    EF[j] = f; EV[j] = v; EI[j] = i; ES[j] = mode === 1 ? 1 : 0;
     EN[0] = n + 1;
+    if (now) { T[4] = T[1]; due(); }
+    return true;
   }
-  /** Apply every queued event at or before frame T[4]. */
+  /**
+   * Apply every queued event at or before frame T[4]. Everything is in this one function, called by
+   * process() every block, so it runs optimised: no call takes or returns a double, nothing is boxed.
+   */
   function due() {
-    var n = EN[0], k = 0, frame = T[4];
-    while (k < n && EF[k] <= frame) { T[5] = EV[k]; apply(EI[k], ES[k] === 1); k++; }
+    var n = EN[0], k = 0;
+    while (k < n && EF[k] <= T[4]) {
+      var i = EI[k], v = EV[k], snap = ES[k] === 1;
+      k++;
+      if (i === EV_CLEAR) {
+        if (v > 0) {
+          var fs = (v > 1000 ? 1000 : v) * 0.001 * sr;
+          FC[2] = fs > 1 ? 1 / fs : 1;
+          if (FC[0] !== 2) FC[0] = 1;
+        } else clearAll();
+        continue;
+      }
+      if (i < EV_TEMPO || i >= FX_NPARAMS) continue;
+      var on = v ? 1 : 0, flag = i >= 0 && (i & 3) === 0 && i < 12;
+      if (!flag && v !== v) continue;
+      var lo = 0, hi = 1;
+      if (i === EV_TEMPO) { lo = 20; hi = 400; } else if (i === 1) hi = 24; else if (i === 2) { lo = -12; hi = 12; }
+      else if (i === 5) { lo = 0.0625; hi = 8; } else if (i === 6) hi = 0.9; else if (i === 9) hi = 0.2;
+      var x = v < lo ? lo : v > hi ? hi : v, retarget = false;
+      switch (i) {
+        case -1: T[0] = x; retarget = true; break;
+        case 0: if (on && DR[11] === 0) clearDrive(); DR[11] = on; if (snap) DR[10] = on; break;
+        case 1: DR[5] = x; if (snap) DR[4] = x; break;
+        case 2: DR[7] = x; if (snap) DR[6] = x; break;
+        case 3: DR[9] = x; if (snap) DR[8] = x; break;
+        case 4: if (on) { if (DL[11] === 1) clearDelay(); DL[11] = 0; } DL[8] = on; if (snap) DL[7] = on; break;
+        case 5: DL[9] = x; retarget = true; break;
+        case 6: DL[4] = x; if (snap) DL[3] = x; break;
+        case 7: DL[6] = x; if (snap) DL[5] = x; break;
+        case 8: if (on) { if (PL[20] === 1) clearPlate(); PL[20] = 0; } PL[11] = on; if (snap) PL[10] = on; break;
+        case 9: PL[1] = x; if (snap) PL[0] = x; break;
+        case 10: PL[3] = x; if (snap) PL[2] = x; break;
+        case 11: PL[5] = x; if (snap) PL[4] = x; break;
+        case 12: PL[7] = x; if (snap) PL[6] = x; break;
+        case 13: PL[9] = x; if (snap) PL[8] = x; break;
+      }
+      if (retarget) {
+        // Delay target in samples from beats and tempo (hacks.ts: +delayS(beats, tempo).toFixed(4)).
+        var bpm = T[0], s = DL[9] * 60 / (bpm > 0 ? bpm : 120);
+        if (s > maxDelay) s = maxDelay;
+        s = Math.round(s * 1e4) / 1e4;
+        if (!(s > 0)) s = 0;
+        if (s > maxDelay) s = maxDelay;
+        var smp = s * sr;
+        if (smp < 1) smp = 1;
+        if (smp > dn - 4) smp = dn - 4;
+        DL[2] = smp;
+        if (snap) DL[1] = smp;
+      }
+      if (i >= 0) PRM[i] = flag ? on : x;
+    }
     if (k > 0) {
-      for (var s = k; s < n; s++) { EF[s - k] = EF[s]; EI[s - k] = EI[s]; EV[s - k] = EV[s]; ES[s - k] = ES[s]; }
+      for (var m = k; m < n; m++) { EF[m - k] = EF[m]; EI[m - k] = EI[m]; EV[m - k] = EV[m]; ES[m - k] = ES[m]; }
       EN[0] = n - k;
     }
   }
-
+  /**
+   * Queue one event (mode 1 = snap, 2 = skip if unchanged). Omitted, past or current frames apply at once.
+   * A frame more than the horizon (600 s) ahead is refused (false): it is almost always a time on the wrong
+   * clock, such as epoch seconds passed as an AudioContext time. Only stores here; admit() does the rest.
+   */
+  function schedule(i, value, frame, mode) {
+    EV[QUEUE] = +value; EF[QUEUE] = frame > 0 ? frame : -1; ES[QUEUE] = mode; EI[QUEUE] = i;
+    return admit();
+  }
+  /** Snap a smoother (state A[s], target A[s + 1]) onto its target once within SNAP_EPS (no subnormals). */
+  function settle(A, s) {
+    var d = A[s + 1] - A[s];
+    if (d < SNAP_EPS && d > -SNAP_EPS) A[s] = A[s + 1];
+  }
+  function settleAll() {
+    settle(DR, 4); settle(DR, 6); settle(DR, 8); settle(DR, 10);
+    settle(DL, 1); settle(DL, 3); settle(DL, 5); settle(DL, 7);
+    settle(PL, 0); settle(PL, 2); settle(PL, 4); settle(PL, 6); settle(PL, 8); settle(PL, 10);
+  }
   // ---- Per-sample stages. Each reads IO[0], IO[1] and writes the result back.
   function driveStage() {
     var xL = IO[0], xR = IO[1];
@@ -321,11 +396,12 @@ function createFxDsp(sampleRate, opts) {
     var aL = (w - i0) % dn;
     if (aL < 0) aL += dn;
     var bL = aL === 0 ? dn - 1 : aL - 1;
-    var dL = dBufL[aL] * (1 - f) + dBufL[bL] * f;
-    var dR = dBufR[aL] * (1 - f) + dBufR[bL] * f;
+    var tg = FC[1]; // 1 except during clear({fadeMs}); x * 1 is exact, so this changes no sample otherwise
+    var dL = (dBufL[aL] * (1 - f) + dBufL[bL] * f) * tg;
+    var dR = (dBufR[aL] * (1 - f) + dBufR[bL] * f) * tg;
     var fb = DL[3];
-    var wl = xL + fb * dL; dBufL[w] = (wl > -1e-15 && wl < 1e-15) ? 0 : wl;
-    var wr = xR + fb * dR; dBufR[w] = (wr > -1e-15 && wr < 1e-15) ? 0 : wr;
+    var wl = xL * tg + fb * dL; dBufL[w] = (wl > -1e-15 && wl < 1e-15) ? 0 : wl;
+    var wr = xR * tg + fb * dR; dBufR[w] = (wr > -1e-15 && wr < 1e-15) ? 0 : wr;
     w++;
     DL[0] = w >= dn ? 0 : w;
     var wet = DL[5];
@@ -348,7 +424,8 @@ function createFxDsp(sampleRate, opts) {
     PL[4] += (PL[5] - PL[4]) * kf;
     PL[6] += (PL[7] - PL[6]) * kf;
     PL[8] += (PL[9] - PL[8]) * kf;
-    var mono = 0.5 * (xL + xR);
+    var tg = FC[1];
+    var mono = 0.5 * (xL + xR) * tg;
     var preSamps = PL[0] * sr;
     var preOut;
     if (preSamps < 1) {
@@ -411,7 +488,8 @@ function createFxDsp(sampleRate, opts) {
     S[0] = 2111 * scale; readFrac(L_D1 + 1); acc = acc - S[1];
     S[0] = 335 * scale; readFrac(L_AP2 + 1); acc = acc - S[1];
     S[0] = 121 * scale; readFrac(L_D2 + 1); acc = acc - S[1];
-    var yr = 0.6 * acc;
+    var yr = 0.6 * acc * tg;
+    yl *= tg;
     var m = PL[8];
     var dg = Math.cos(m * HALFPI), wg = Math.sin(m * HALFPI);
     var oL = dg * xL + wg * yl, oR = dg * xR + wg * yr;
@@ -464,6 +542,9 @@ function createFxDsp(sampleRate, opts) {
       if (xL !== xL || xL === Infinity || xL === -Infinity) xL = 0;
       if (xR !== xR || xR === Infinity || xR === -Infinity) xR = 0;
       IO[0] = xL; IO[1] = xR;
+      var ph = FC[0];
+      if (ph === 1) { var g = FC[1] - FC[2]; if (g <= 0) { g = 0; FC[0] = 2; FC[3] = 0; FC[4] = 0; FC[5] = 0; } FC[1] = g; }
+      else if (ph === 3) { g = FC[1] + FC[2]; if (g >= 1) { g = 1; FC[0] = 0; } FC[1] = g; }
       driveStage();
       delayStage();
       plateStage();
@@ -487,26 +568,25 @@ function createFxDsp(sampleRate, opts) {
     peak: peak,
     /** Lowest limiter gain since the last read of `takeGainReduction()`. */
     takeGainReduction: function () { var lo = LM[2]; LM[2] = 1; return lo; },
-    /** Set one parameter (DSP units, FX_PARAM index) at an absolute frame (omitted/past = now). snap = no smoothing. */
-    set: function (index, value, frame, snap) {
-      if (!(frame > T[1])) { T[5] = +value; apply(index | 0, !!snap); }
-      else enqueue(index | 0, +value, Math.round(frame), snap);
-    },
+    /**
+     * Set one parameter (DSP units, FX_PARAM index) at an absolute frame (omitted/past = now). snap = no smoothing.
+     * Returns false when the frame is more than 600 s ahead (refused: a time on the wrong clock).
+     */
+    set: function (index, value, frame, snap) { return schedule(index | 0, value, frame, snap ? 1 : 0); },
     get: function (index) { return PRM[index | 0]; },
-    /** Copy a whole program (Float64Array or array of FX_NPARAMS DSP values) in at a frame. */
+    /** Copy a whole program (Float64Array or array of FX_NPARAMS DSP values) in at a frame. Unchanged values are skipped unless snap. */
     load: function (program, frame, snap) {
-      for (var i = 0; i < FX_NPARAMS && i < program.length; i++) api.set(i, program[i], frame, snap);
+      for (var i = 0; i < FX_NPARAMS && i < program.length; i++) schedule(i, program[i], frame, snap ? 1 : 2);
     },
-    /** Tempo for synced params (the delay). A change glides the delay time (80 ms), tape-style. */
-    setTempo: function (bpm, frame, snap) {
-      if (!(frame > T[1])) { T[5] = +bpm; apply(EV_TEMPO, !!snap); }
-      else enqueue(EV_TEMPO, +bpm, Math.round(frame), snap);
-    },
+    /** Tempo for synced params (the delay). A change glides the delay time (80 ms), tape-style. False if refused. */
+    setTempo: function (bpm, frame, snap) { return schedule(EV_TEMPO, bpm, frame, snap ? 1 : 0); },
     getTempo: function () { return T[0]; },
-    /** Panic: drop every tail now (or at a frame). */
-    clear: function (frame) {
-      if (!(frame > T[1])) clearAll(); else enqueue(EV_CLEAR, 0, Math.round(frame), false);
-    },
+    /**
+     * Panic: drop the delay and reverb tails now (or at a frame). fadeMs > 0 ramps the wet signal down over that
+     * long first, then zeroes the lines a chunk per block and ramps back in (no click, no big fill). The instant
+     * clear also resets the drive's one-sample antialiasing state; neither touches the limiter. False if refused.
+     */
+    clear: function (frame, fadeMs) { return schedule(EV_CLEAR, fadeMs > 0 ? fadeMs : 0, frame, 0); },
     /**
      * Render `frames` samples. inR null = mono in (R = L). outR null = mono out (left only).
      * blockFrame is the absolute frame of sample 0 (AudioWorklet `currentFrame`); omitted = continues.
@@ -514,6 +594,7 @@ function createFxDsp(sampleRate, opts) {
     process: function (inL, inR, outL, outR, frames, blockFrame) {
       var start = blockFrame === undefined || blockFrame === null ? T[1] : +blockFrame;
       T[2] = 0; T[3] = 0;
+      admit(); // keeps admit() hot (optimised) even when events are rare; the slot is normally empty
       var i = 0;
       while (i < frames) {
         T[4] = start + i;
@@ -528,7 +609,9 @@ function createFxDsp(sampleRate, opts) {
       }
       T[1] = start + frames;
       peak[0] = T[2]; peak[1] = T[3];
+      settleAll();
       if (DL[11] === 1 || PL[20] === 1) clearSome();
+      if (FC[0] === 2) fadeClearSome();
     }
   };
   return api;

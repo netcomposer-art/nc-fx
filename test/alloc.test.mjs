@@ -54,3 +54,21 @@ test('hot path has no allocating syntax (static scan of the per-sample code)', (
     assert.ok(!bad.test(hot), `hot path matches ${bad}`);
   }
 });
+
+// Heap-delta gate (Petra's review, Rhythm's perf:gate method): each scenario in its own process with a fixed
+// 64 MB young generation, so nothing is collected inside a window and the heapUsed delta is every byte the
+// engine allocated. The first windows still carry JIT tiering (compiled code), so the gate is that some
+// 10 000-block window after warm-up allocates exactly 0 B: any per-block or per-event allocation would show
+// up in every window. Event values are pre-boxed, as they are in a worklet, so the harness adds nothing.
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+const GATE = fileURLToPath(new URL('./bench/alloc-gate.mjs', import.meta.url));
+for (const scenario of ['steady', 'events', 'tempo', 'sparse', 'holdToggles', 'clearFade']) {
+  test(`heap-delta gate: 0 B and 0 GCs (${scenario})`, () => {
+    const out = execFileSync(process.execPath, ['--expose-gc', '--min-semi-space-size=64', '--max-semi-space-size=64', GATE, scenario],
+      { encoding: 'utf8', env: { ...process.env, TRIES: '5' } });
+    const r = JSON.parse(out.trim().split('\n').pop());
+    assert.equal(r.gcs, 0, `${r.gcs} GCs`);
+    assert.equal(r.min, 0, `no allocation-free window: ${r.bytes.join(', ')} B per ${r.blocks} blocks`);
+  });
+}
