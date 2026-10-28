@@ -8,7 +8,7 @@ export const FX_NPARAMS: 14;
 export interface FxDspOptions {
   /** 'run' (default): a bypassed effect keeps running, so its tail rings out (ASTRID). 'hold': it costs nothing and its tail is dropped. */
   bypassMode?: 'hold' | 'run';
-  /** 'off' (default), 'lookahead' (-1 dB ceiling, 1.5 ms latency), 'soft' (zero-latency tanh clip to -1 dB). */
+  /** 'off' (default), 'lookahead' (-1 dB ceiling, 1.5 ms latency), 'soft' (zero latency: linear up to -6 dBFS, then a soft knee toward -1 dBFS). */
   limiter?: 'lookahead' | 'soft' | 'off';
   /** Gain before the limiter. Default 1 (ASTRID's master uses 0.8). */
   preGain?: number;

@@ -26,6 +26,14 @@ var HALFPI = 1.5707963267948966;
 var TWOPI = 6.283185307179586;
 var CEILING = 0.8912509381337456;
 var BW = 0.9995;
+// Bypass crossfade: the on/off smoother b runs 0..1 (20 ms one-pole); outside 0.001..0.999 the stage is exactly
+// dry or exactly wet. In between the equal-power gains follow smoothstep((b - 0.001) / 0.998), so they reach
+// the endpoints with zero slope instead of ASTRID's step of cos(0.999 * pi / 2) = 0.0016 (about -56 dB).
+var XF = 1 / 0.998;
+// 'soft' limiter: exactly linear up to the knee (-6 dBFS), then KNEE + KW * tanh((|x| - KNEE) / KW), which leaves
+// the knee with slope 1 (C1) and approaches the ceiling (-1 dBFS).
+var KNEE = 0.5011872336272722;
+var KW = 0.8912509381337456 - 0.5011872336272722;
 var MAX_DELAY_S = 4.9;
 var QUEUE = 256;
 var NO_EVENT = -99; // empty staging slot
@@ -98,11 +106,11 @@ export function createFxDsp(sampleRate, opts) {
   var la = Math.round(0.0015 * sr);
   if (la < 1) la = 1;
   var limL = new Float32Array(la), limR = new Float32Array(la), limG = new Float32Array(la);
-  var LM = new Float64Array(8); // 0 w, 1 env, 2 lo, 3 rel, 4 soft u0, 5 soft u1, 6 soft f0, 7 soft f1
+  var LM = new Float64Array(4); // 0 w, 1 env, 2 lo, 3 rel
   LM[3] = fxCoef(0.05, sr);
   function limReset() {
     limL.fill(0); limR.fill(0); limG.fill(1);
-    LM[0] = 0; LM[1] = 1; LM[2] = 1; LM[4] = 0; LM[5] = 0; LM[6] = 0; LM[7] = 0;
+    LM[0] = 0; LM[1] = 1; LM[2] = 1;
   }
   limReset();
 
@@ -235,7 +243,7 @@ export function createFxDsp(sampleRate, opts) {
   // Events: the API stages one event in slot QUEUE (EI/EV/EF/ES) and calls admit(), which process() also calls
   // every block, so admit() runs optimised and the cold API never reads a double (a cold read boxes it).
   // Sorted by frame; equal frames keep call order. A full queue applies its earliest frame's events early
-  // (the smallest timing error), never drops one; frames beyond the horizon are refused, so junk can't fill it.
+  // (the smallest timing error), or the new event itself when it is due before them, never drops one; frames beyond the horizon are refused, so junk can't fill it.
   function admit() {
     var i = EI[QUEUE];
     if (i === NO_EVENT) return true;
@@ -248,7 +256,19 @@ export function createFxDsp(sampleRate, opts) {
       if (f >= LF[i]) { LF[i] = f; LV[i] = v; }
     }
     var n = EN[0];
-    if (n >= QUEUE) { T[4] = EF[0]; due(); n = EN[0]; }
+    if (n >= QUEUE) {
+      if (f < EF[0]) {
+        // Full, and this one is due before the head (or now): apply it on its own. Pushing the head out early
+        // instead would let a later change be undone by this earlier one. Slot QUEUE holds it for due().
+        for (var q = n; q > 0; q--) { EF[q] = EF[q - 1]; EV[q] = EV[q - 1]; EI[q] = EI[q - 1]; ES[q] = ES[q - 1]; }
+        EF[0] = f; EV[0] = v; EI[0] = i; ES[0] = mode === 1 ? 1 : 0;
+        EN[0] = n + 1;
+        T[4] = f; due();
+        EI[QUEUE] = NO_EVENT;
+        return true;
+      }
+      T[4] = EF[0]; due(); n = EN[0]; // the earliest frame goes out early: the smallest timing error
+    }
     var j = n;
     while (j > 0 && EF[j - 1] > f) { EF[j] = EF[j - 1]; EV[j] = EV[j - 1]; EI[j] = EI[j - 1]; ES[j] = ES[j - 1]; j--; }
     EF[j] = f; EV[j] = v; EI[j] = i; ES[j] = mode === 1 ? 1 : 0;
@@ -369,7 +389,8 @@ export function createFxDsp(sampleRate, opts) {
     }
     if (b >= 0.999) { IO[0] = oL; IO[1] = oR; return; }
     if (b <= 0.001) return;
-    var dryG = Math.cos(b * HALFPI), wetG = Math.sin(b * HALFPI);
+    var xt = (b - 0.001) * XF, xs = xt * xt * (3 - 2 * xt); // smoothstep: lands on 0 and 1 with zero slope
+    var dryG = Math.cos(xs * HALFPI), wetG = Math.sin(xs * HALFPI);
     IO[0] = dryG * xL + wetG * oL;
     IO[1] = dryG * xR + wetG * oR;
   }
@@ -405,7 +426,8 @@ export function createFxDsp(sampleRate, opts) {
     var oL = dg * xL + wg * dL, oR = dg * xR + wg * dR;
     if (b >= 0.999) { IO[0] = oL; IO[1] = oR; return; }
     if (b <= 0.001) return;
-    var dryG = Math.cos(b * HALFPI), wetG = Math.sin(b * HALFPI);
+    var xt = (b - 0.001) * XF, xs = xt * xt * (3 - 2 * xt); // smoothstep: lands on 0 and 1 with zero slope
+    var dryG = Math.cos(xs * HALFPI), wetG = Math.sin(xs * HALFPI);
     IO[0] = dryG * xL + wetG * oL;
     IO[1] = dryG * xR + wetG * oR;
   }
@@ -491,7 +513,8 @@ export function createFxDsp(sampleRate, opts) {
     var oL = dg * xL + wg * yl, oR = dg * xR + wg * yr;
     if (b >= 0.999) { IO[0] = oL; IO[1] = oR; return; }
     if (b <= 0.001) return;
-    var dryG = Math.cos(b * HALFPI), wetG = Math.sin(b * HALFPI);
+    var xt = (b - 0.001) * XF, xs = xt * xt * (3 - 2 * xt); // smoothstep: lands on 0 and 1 with zero slope
+    var dryG = Math.cos(xs * HALFPI), wetG = Math.sin(xs * HALFPI);
     IO[0] = dryG * xL + wetG * oL;
     IO[1] = dryG * xR + wetG * oR;
   }
@@ -499,13 +522,10 @@ export function createFxDsp(sampleRate, opts) {
     var xL = IO[0] * preGain, xR = IO[1] * preGain;
     if (limMode === 0) { IO[0] = xL; IO[1] = xR; return; }
     if (limMode === 2) {
-      // Zero-latency soft clip to the ceiling: c * tanh(x / c), antialiased like the drive.
-      var u = xL / CEILING, ab = u < 0 ? -u : u, f = ab + Math.log(1 + Math.exp(-2 * ab)) - 0.6931471805599453, d = u - LM[4];
-      IO[0] = CEILING * ((d > 1e-5 || d < -1e-5) ? (f - LM[6]) / d : Math.tanh(0.5 * (u + LM[4])));
-      LM[4] = u; LM[6] = f;
-      u = xR / CEILING; ab = u < 0 ? -u : u; f = ab + Math.log(1 + Math.exp(-2 * ab)) - 0.6931471805599453; d = u - LM[5];
-      IO[1] = CEILING * ((d > 1e-5 || d < -1e-5) ? (f - LM[7]) / d : Math.tanh(0.5 * (u + LM[5])));
-      LM[5] = u; LM[7] = f;
+      // Soft knee, zero latency, stateless: bit-transparent below the knee (no antialiasing filter there either).
+      var sL = xL < 0 ? -xL : xL, sR = xR < 0 ? -xR : xR;
+      if (sL > KNEE) { sL = KNEE + KW * Math.tanh((sL - KNEE) / KW); IO[0] = xL < 0 ? -sL : sL; } else IO[0] = xL;
+      if (sR > KNEE) { sR = KNEE + KW * Math.tanh((sR - KNEE) / KW); IO[1] = xR < 0 ? -sR : sR; } else IO[1] = xR;
       return;
     }
     var aL = xL < 0 ? -xL : xL;
