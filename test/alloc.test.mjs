@@ -39,6 +39,13 @@ for (const [limiter, bypassMode, withMod] of [[undefined, undefined], ['lookahea
         f += 128;
       }
     };
+    // Collect the earlier tests' engines before warming up. Every engine's closures come from the same function
+    // literals in createFxDsp, so V8 gives them one shared feedback vector and optimised code. That code can embed the
+    // earlier engines' closures (inlined call targets) weakly; if they die in the gc() at the start of the measured
+    // window, the code deoptimises ('weak objects'), and until it is re-optimised the hot loop runs in baseline code,
+    // which boxes doubles. On a loaded runner that was enough for one scavenge (CI test(20), 'limiter soft, bypass
+    // run', ~9 of 16 runs under 16x local contention on main too; 0 of 32 with this gc()). The assertion is unchanged.
+    if (globalThis.gc) globalThis.gc();
     run(6000); // warm up: let the optimiser settle
     const gcs = await gcsDuring(() => run(30000)); // 80 s of audio
     assert.equal(gcs, 0, `${gcs} GCs while processing`);
