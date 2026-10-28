@@ -142,7 +142,9 @@ function createFxDsp(sampleRate, opts) {
   // 21 tanh(k) for 19, 22 toneS (block-rate smoothed), 23 the tone mod sample in use
   var DR = new Float64Array(24); // 0 u0, 1 u1, 2 f0, 3 f1, 4 driveS, 5 driveT, 6 outS, 7 outT, 8 mixS, 9 mixT, 10 on, 11 onT
   DR[8] = 1; DR[9] = 1; DR[13] = 100 / 99; DR[22] = 1; DR[20] = -1;
-  var modBuf = null; // this block's mod signal while the bus is on (src/mod.js), else null
+  var modBuf = null; // this block's mod signal while a depth is set: the CV, or ZCV (silence) when there is none
+  var ZCV = new Float32Array(MOD_GRID); // zero CV: no CV sounds exactly like a silent one (Zeta, PR B P2-a)
+  function zeroCv(n) { if (ZCV.length < n) ZCV = new Float32Array(n); return ZCV; } // grows once per larger block size
   toneCoef(); // the coefficient for tone 1.0, so a tone switched on between grid frames starts from a real filter
 
   // ---- Delay (ncDelay*: one stereo tap, linear interpolation, equal-power wet/dry)
@@ -260,7 +262,9 @@ function createFxDsp(sampleRate, opts) {
   function toneBlock(j) {
     var tT = DR[13] > 1 ? 1 : DR[13]; // off counts as 1.0 for the tone mod
     DR[22] += (tT - DR[22]) * 0.25;
-    DR[23] = modBuf !== null ? modBuf[j] : 0;
+    var c = modBuf !== null ? modBuf[j] : 0;
+    if (c !== c || c === Infinity || c === -Infinity) c = 0; // a NaN would stick in the LP state (and everything after)
+    DR[23] = c;
     toneCoef();
   }
   function clearDelay() { dBufL.fill(0); dBufR.fill(0); DL[0] = 0; DL[10] = 0; }
@@ -464,7 +468,9 @@ function createFxDsp(sampleRate, opts) {
       if (DR[4] !== DR[20]) { DR[20] = DR[4]; DR[19] = (Math.pow(10, DR[4] / 20) - 1) / 9; var a0 = DR[19]; a0 = a0 < 0 ? 0 : a0 > 1 ? 1 : a0; DR[21] = Math.tanh(1 + a0 * 9); }
       var kk, tk;
       if (DR[17] !== 0) {
-        var amt = DR[19] + DR[17] * modBuf[i];
+        var cv = modBuf[i];
+        if (cv !== cv || cv === Infinity || cv === -Infinity) cv = 0; // like the audio input: a bad CV sample is 0
+        var amt = DR[19] + DR[17] * cv;
         amt = amt < 0 ? 0 : amt > 1 ? 1 : amt;
         kk = 1 + amt * 9; tk = Math.tanh(kk);
       } else {
@@ -495,7 +501,9 @@ function createFxDsp(sampleRate, opts) {
       if (DR[17] !== 0) {
         // Smooth + amount mod: +-24 dB at full depth. Floored at 0.01 dB (not 0) so the antialiasing state keeps
         // running: resetting it on every accent would replay the one-sample dip on enable (a tick per note).
-        db += DR[17] * modBuf[i] * 24;
+        var cs = modBuf[i];
+        if (cs !== cs || cs === Infinity || cs === -Infinity) cs = 0;
+        db += DR[17] * cs * 24;
         db = db < 0.01 ? 0.01 : db > 24 ? 24 : db;
       }
       var g = Math.pow(10, db / 20) - 1;
@@ -724,7 +732,8 @@ function createFxDsp(sampleRate, opts) {
     get: function (index) { return PRM[index | 0]; },
     /** Copy a whole program (Float64Array or array of FX_NPARAMS DSP values) in at a frame. Unchanged values are skipped unless snap. */
     load: function (program, frame, snap) {
-      for (var i = 0; i < FX_NPARAMS && i < program.length; i++) schedule(i, program[i], frame, snap ? 1 : 2);
+      // A shorter (older) program gets the defaults for the rest, so nothing stays at a stale value.
+      for (var i = 0; i < FX_NPARAMS; i++) schedule(i, i < program.length ? program[i] : START[i], frame, snap ? 1 : 2);
     },
     /** Tempo for synced params (the delay). A change glides the delay time (80 ms), tape-style. False if refused. */
     setTempo: function (bpm, frame, snap) { return schedule(EV_TEMPO, bpm, frame, snap ? 1 : 0); },
@@ -741,12 +750,13 @@ function createFxDsp(sampleRate, opts) {
      */
     process: function (inL, inR, outL, outR, frames, blockFrame, mod) {
       var start = blockFrame === undefined || blockFrame === null ? T[1] : +blockFrame;
-      // Mod bus (src/mod.js): off unless a mod buffer covers the block and a route has depth. Off, the render below
-      // is the same code as without a mod input.
+      // Mod bus (src/mod.js): the depths always apply; the CV is the mod buffer when it covers the block and a route
+      // has depth (modBlock), else silence (ZCV), so no CV, a short one and a silent one all sound the same. With
+      // every depth at 0 the render below is the same code as without a mod input.
       var mon = modBlock(MB, mod, frames);
-      modBuf = mon === 1 ? mod : null;
-      DR[17] = mon === 1 ? MB.RD[MOD_T_DRIVE_AMOUNT] : 0;
-      DR[18] = mon === 1 ? MB.RD[MOD_T_DRIVE_TONE] : 0;
+      DR[17] = MB.RD[MOD_T_DRIVE_AMOUNT];
+      DR[18] = MB.RD[MOD_T_DRIVE_TONE];
+      modBuf = mon === 1 ? mod : DR[17] !== 0 || DR[18] !== 0 ? zeroCv(frames) : null;
       T[2] = 0; T[3] = 0;
       admit(); // keeps admit() hot (optimised) even when events are rare; the slot is normally empty
       var i = 0;
