@@ -8,7 +8,9 @@ These are ASTRID's Hacks, moved into a package so that Rhythm, Bass and ASTRID a
 - **Framework-free.** Plain ES modules, types included, and no runtime dependencies. nc-clock and nc-ui are
   optional and never imported.
 - **Sounds the same as ASTRID.** The DSP is a port of ASTRID's `hacks-vendor/dsp.js` and renders identical samples
-  for the same settings. A test checks this against ASTRID's own file.
+  for the same settings, with ASTRID's master options (`limiter: 'lookahead', preGain: 0.8`), including dial and
+  tempo changes while playing. A test checks this against ASTRID's own file. The few deliberate differences are
+  listed in [Differs from ASTRID](#differs-from-astrid).
 - **Real-time safe.** Nothing allocates on the audio thread: no allocation in `process()` and none for a parameter,
   tempo, bypass or clear event. A heap-delta gate (fixed young generation, one process per scenario) holds this at
   0 B, and a 60 s silence test checks that denormals can't creep in. All timing runs on the audio clock and is
@@ -67,7 +69,7 @@ The defaults change nothing you didn't ask for:
 
 | Option | Default | What it means |
 |---|---|---|
-| `limiter` | `'off'` | No limiter, no latency. Opt in with `'soft'` (zero-latency tanh clip to −1 dB) or `'lookahead'` (−1 dB ceiling, 1.5 ms latency). |
+| `limiter` | `'off'` | No limiter, no latency. Opt in with `'soft'` (zero latency: exactly linear up to a −6 dBFS knee, then a smooth curve toward −1 dBFS) or `'lookahead'` (−1 dB ceiling, 1.5 ms latency, exactly unity below it). |
 | `preGain` | `1` | Unity gain before the limiter stage. |
 | `bypassMode` | `'run'` | A bypassed effect keeps running, so delay and reverb tails ring out when you bypass it and are still there when you turn it back on, as in ASTRID. `'hold'` opts in to zero CPU while bypassed, at the cost of dropping the tail. |
 | `maxDelaySeconds` | `4.9` | The longest delay (ASTRID's). The delay line is sized from it (about 0.4 MB per second at 48 kHz); up to 60. |
@@ -110,7 +112,48 @@ Effects run in a fixed order. Each one has On/Off (bypass) and a mix:
 | **Drive** (`drive`) | Drive 0–24 dB (0 = clean), Output −12…+12 dB, Mix 0–100 % | `ncDrive*`: tanh with first-order ADAA, level-compensated |
 | **Delay** (`delay`) | Timing 1/16, 1/8, 1/8 dotted, 1/4, 1/4 dotted, 1/2 (tempo-synced, max 4.9 s); Feedback 0–90 %; Wet/dry (`mix`) 0–100 % | `ncDelay*`: a stereo tap with linear interpolation and an 80 ms glide on time changes |
 | **Reverb** (`plate`, alias `reverb`) | Pre-delay 0–200 ms, Size 0–100 (0.5×–1.5×), Decay, Damping, Mix 0–100 % | `ncPlate*`: Dattorro plate (JAES 1997) |
-| Limiter (fixed, last) | `limiter: 'off'` (default) · `'soft'` (zero-latency tanh clip) · `'lookahead'` (−1 dB ceiling, 1.5 ms latency); `preGain` 1 (default; ASTRID 0.8) | `ncLimiter*` and the 0.8 pre-gain from `ncRender` |
+| Limiter (fixed, last) | `limiter: 'off'` (default) · `'soft'` (zero latency, linear to −6 dBFS, then a soft knee toward −1 dBFS) · `'lookahead'` (−1 dB ceiling, 1.5 ms latency); `preGain` 1 (default; ASTRID 0.8) | `ncLimiter*` and the 0.8 pre-gain from `ncRender` |
+
+### Limiter gain
+
+Steady 997 Hz sine at 48 kHz, effects bypassed, `preGain` 1. The gain is RMS out over RMS in; "exact" means every
+output sample equals the input (delayed by the lookahead).
+
+| Input | `'soft'` before (tanh) | `'soft'` now (knee) | `'lookahead'` |
+|---|---|---|---|
+| −24 dBFS | −0.03 dB | 0 dB, exact | 0 dB, exact |
+| −12 dBFS | −0.19 dB (peak −0.24) | 0 dB, exact | 0 dB, exact |
+| −6 dBFS | −0.66 dB (peak −0.87) | 0 dB, exact | 0 dB, exact |
+| −3 dBFS | −1.22 dB | −0.10 dB | 0 dB, exact |
+| 0 dBFS | −2.18 dB (peak out −2.86 dBFS) | −0.89 dB (peak out −1.56 dBFS) | −1.00 dB (peak out −1.00 dBFS) |
+
+`'soft'` above the knee (k = −6 dBFS, ceiling c = −1 dBFS): `k + (c − k)·tanh((|x| − k) / (c − k))`, which leaves the
+knee with slope 1 (no corner) and never reaches the ceiling. It is stateless, with no antialiasing filter: the old
+tanh's first-order antialiasing averaged neighbouring samples, which coloured quiet signals too. `'lookahead'`
+already passes everything below its ceiling untouched (after a limited peak, once its 50 ms release has settled),
+so it has no knee: one would colour the signal below the ceiling.
+
+### Differs from ASTRID
+
+Deliberate differences (Peter's calls on nc-fx #1, 2026-10-28, and the reviews). Everything else renders ASTRID's
+samples exactly.
+
+- **Bypass crossfade.** Turning an effect on or off still takes ASTRID's ~140 ms (a 20 ms one-pole), but the
+  equal-power gains follow a smoothstep of it, so they land on fully wet or fully dry with zero slope. ASTRID jumps
+  the last 0.16 % of the swing in one sample when the fade passes 0.999 or 0.001 (about −56 dB). At rest, bypassed or
+  not, the output is bit-identical to ASTRID's; during a bypass change it is not, and neither are delay or reverb
+  tails fed from that change.
+- **`'soft'` limiter.** Not in ASTRID (ASTRID uses the lookahead). It is now the knee above, not a full-range tanh.
+  The lookahead limiter is unchanged and bit-identical.
+- **`clear({fadeMs})`.** New. The instant `clear()` does what ASTRID's `ncChainClear` does (effect tails only;
+  the limiter is left alone).
+- **Denormal snap.** Smoothers land on their target once within 1e-30, so silence can't decay into subnormal
+  numbers. The output can differ only below 1e-30, far below any audible or Float32-normal level, and every parity
+  test is still identical.
+- **Options and defaults.** `bypassMode: 'hold'` and `maxDelaySeconds` beyond 4.9 s are opt-in extras. The defaults
+  `limiter: 'off'` and `preGain: 1` are not ASTRID's master (`'lookahead'` and 0.8): pass those to match it.
+- **Kept as in ASTRID (Peter's call):** the drive's one-sample dip when it is switched on (its antialiasing state is
+  reset then).
 
 **Coming next** (a later PR, from the rest of ASTRID's chain): low-, high- and band-pass filters, a 3-band EQ,
 compressor, width, flanger, chorus and phaser. Also planned: user-reorderable slots, an accent modulation bus,

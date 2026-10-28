@@ -33,6 +33,17 @@ Changes from Zeta's second review and Petra's performance review (2026-10-28):
   `load()` skips unchanged values; the pre-ready queue is capped at 256 (then folds); `mount()` can't leak a
   panel when `dispose()` runs first; `NOTICE.md` is published.
 
+Peter's answers and Zeta's re-review (2026-10-28):
+
+- **`'soft'` limiter has a knee.** Exactly linear (bit-transparent) up to −6 dBFS, then a C1 curve toward −1 dBFS;
+  it was a full-range tanh (−0.19 dB at −12 dBFS, −0.66 dB at −6, RMS). The lookahead limiter was checked: it is
+  already unity below its ceiling, so it is unchanged.
+- **Smooth bypass crossfade.** The fade lands on its endpoint with zero slope (smoothstep) instead of stepping at
+  0.999/0.001. Differs from ASTRID only while a bypass change is fading (see the README's "Differs from ASTRID").
+- **Full queue.** An event due before the head of a full queue (or now) is applied by itself instead of pushing the
+  head out early, which could undo a later change (mix 0.8 at frame 10000, then 0.2 now, used to end at 0.2).
+- The drive's one-sample dip on enable stays as in ASTRID (Peter's call).
+
 First cut:
 
 - First cut, extracted from ASTRID (NetComposer-Synth 024f200): drive, tempo-synced delay and plate reverb,
