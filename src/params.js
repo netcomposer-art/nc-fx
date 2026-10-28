@@ -140,6 +140,33 @@ export function dialToDsp(type, key, v) {
   return 0;
 }
 
+var UNITS = { drive_db: 'dB', output_db: 'dB', delay_beats: 'beats', predelay: 'ms' }; // others: '%'
+/**
+ * Every control as plain JSON (no functions), for hosts that build their own UI or automation:
+ * {effect, key, label, index, unit, min, max, step, default, curve, control, tempoSynced[, options]}.
+ * index = engine parameter (FX_PARAM; for a bypass toggle that is the effect's on flag, engine value = !bypass).
+ * Readouts are separate: FORMATS['delay.feedback'](value, bpm).
+ */
+export function describeParams() {
+  var out = [];
+  EFFECTS.forEach(function (e) {
+    var synced = !!e.tempoSynced;
+    out.push({ effect: e.type, key: 'bypass', label: 'Bypass', index: PARAM_INDEX[e.type].bypass, unit: null, min: 0, max: 1, step: 1,
+      default: true, curve: 'linear', control: 'toggle', tempoSynced: false });
+    e.dials.forEach(function (d) {
+      var r = { effect: e.type, key: d.key, label: d.label, index: PARAM_INDEX[e.type][d.key], unit: UNITS[d.key] || '%',
+        min: d.min, max: d.max, step: d.step, default: d.default, curve: d.options ? 'stepped' : 'linear',
+        control: d.options ? 'select' : 'knob', tempoSynced: synced && d.key === 'delay_beats' };
+      if (d.options) r.options = d.options.map(function (x) { return { value: x.value, label: x.label }; });
+      out.push(r);
+    });
+  });
+  return out;
+}
+/** Readout per control, by 'effect.key': FORMATS['plate.size'](50) === '1.00×'. bpm matters for tempo-synced ones. */
+export var FORMATS = {};
+EFFECTS.forEach(function (e) { e.dials.forEach(function (d) { FORMATS[e.type + '.' + d.key] = d.format; }); });
+
 /** A clean state to the engine's program: FX_NPARAMS values in FX_PARAM order. */
 export function compile(state, into) {
   var p = into || new Float64Array(NPARAMS);

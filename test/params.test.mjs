@@ -110,3 +110,20 @@ test('migrate: ASTRID\'s saved hacks array (wet -> mix, absent = bypassed, other
   assert.equal(state.chain[2].bypass, true); // no plate in the ASTRID chain: not playing
   assert.equal(state.chain[2].dials.mix, 0);
 });
+
+test('describeParams() is plain JSON for every control; FORMATS gives the readouts by effect.key', async () => {
+  const { describeParams, FORMATS } = await import('../src/params.js');
+  const d = describeParams();
+  assert.deepEqual(JSON.parse(JSON.stringify(d)), d); // no functions, nothing lost
+  assert.equal(d.length, FX_NPARAMS);
+  assert.deepEqual(d.map((x) => x.index).sort((a, b) => a - b), [...Array(FX_NPARAMS).keys()]);
+  const beats = d.find((x) => x.effect === 'delay' && x.key === 'delay_beats');
+  assert.deepEqual([beats.control, beats.unit, beats.tempoSynced, beats.options.length], ['select', 'beats', true, 6]);
+  const by = d.find((x) => x.effect === 'plate' && x.key === 'bypass');
+  assert.deepEqual([by.control, by.default, by.index], ['toggle', true, FX_PARAM.PLATE_ON]);
+  const fb = d.find((x) => x.effect === 'delay' && x.key === 'feedback');
+  assert.deepEqual([fb.unit, fb.min, fb.max, fb.step, fb.default, fb.control, fb.curve], ['%', 0, 90, 1, 35, 'knob', 'linear']);
+  for (const x of d) assert.ok(x.key === 'bypass' || typeof FORMATS[x.effect + '.' + x.key] === 'function', x.key);
+  assert.equal(FORMATS['delay.delay_beats'](0.75, 120), '375 ms');
+  assert.equal(FORMATS['drive.drive_db'](0), 'clean');
+});

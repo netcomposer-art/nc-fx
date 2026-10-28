@@ -39,3 +39,12 @@ export function sanitize(raw: unknown): FxState;
 export function cloneState(s: FxState): FxState;
 export function dialToDsp(type: FxEffectType, key: string, value: number | boolean): number;
 export function compile(state: unknown, into?: Float64Array): Float64Array;
+export interface FxParamInfo {
+  effect: FxEffectType; key: string; label: string; index: number; unit: 'dB' | '%' | 'beats' | 'ms' | null;
+  min: number; max: number; step: number | null; default: number | boolean; curve: 'linear' | 'stepped';
+  control: 'knob' | 'select' | 'toggle'; tempoSynced: boolean; options?: Array<{ value: number; label: string }>;
+}
+/** Every control as plain JSON (no functions). */
+export function describeParams(): FxParamInfo[];
+/** Readouts by 'effect.key' (e.g. 'delay.delay_beats'); bpm is used by tempo-synced ones. */
+export const FORMATS: Readonly<Record<string, (value: number, bpm?: number) => string>>;
