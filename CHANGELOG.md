@@ -57,3 +57,11 @@ First cut:
 - `createFxCore` (Web Audio nodes), `createFx` (the core plus a lazy panel), `createFxDsp` (an engine to embed in
   your own worklet), and the nc-clock tempo adapters.
 - State `{v: 1, chain}`, with migration from ASTRID's saved hacks arrays.
+
+After the first merge (main 3242a05), toward what Bass still needs (design approved by Zeta, 2026-10-28):
+
+- **Mod input (plumbing only).** `createFxCore(ctx, { modInput: true })` adds `fx.modInput`, a mono GainNode
+  into the worklet's second input, for a control signal such as Bass's accent CV. Engines embedded in your own
+  worklet take it as an optional 7th `process()` argument. Nothing is routed from it yet: the output is
+  bit-identical with it absent, present and silent, or present and moving, and the default is unchanged (no
+  `modInput`, one input). The depth dials come in the next PRs.

@@ -62,6 +62,12 @@ export function createFxCore(ctx, opts) {
   var fade = Math.max(0, finiteOr(o.crossfade, 0.012));
   var maxDelaySeconds = finiteOr(o.maxDelaySeconds, undefined);
   var input = ctx.createGain(), output = ctx.createGain(), dry = ctx.createGain(), wet = ctx.createGain();
+  // Opt-in mod input (CV, e.g. Bass's accent): mono, channel 0 of whatever is connected, into node input 1.
+  var modInput = null;
+  if (o.modInput === true) {
+    modInput = ctx.createGain();
+    modInput.channelCount = 1; modInput.channelCountMode = 'explicit'; modInput.channelInterpretation = 'discrete';
+  }
   wet.gain.value = 0;
   input.connect(dry);
   dry.connect(output);
@@ -109,7 +115,7 @@ export function createFxCore(ctx, opts) {
   var ready = loadFxWorklet(ctx, o.moduleUrl).then(function () {
     if (disposed) return;
     node = new AudioWorkletNode(ctx, PROCESSOR_NAME, {
-      numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2],
+      numberOfInputs: modInput ? 2 : 1, numberOfOutputs: 1, outputChannelCount: [2],
       channelCount: 2, channelCountMode: 'explicit', channelInterpretation: 'speakers',
       processorOptions: {
         program: startProgram, bpm: startBpm, bypassMode: bypassMode, limiter: limiter, preGain: preGain,
@@ -118,6 +124,7 @@ export function createFxCore(ctx, opts) {
       }
     });
     input.connect(node);
+    if (modInput) modInput.connect(node, 0, 1);
     node.connect(wet);
     // Wire -> chain, on the audio clock. Before the context has run, just switch.
     var t = ctx.currentTime;
@@ -138,6 +145,7 @@ export function createFxCore(ctx, opts) {
   var core = {
     input: input,
     output: output,
+    modInput: modInput,
     /** Resolves when the chain is in the signal path (or when it gave up: see status). Never rejects. */
     ready: ready,
     get status() { return status; },
@@ -211,7 +219,7 @@ export function createFxCore(ctx, opts) {
       pending = [];
       listeners.length = 0;
       if (node) { node.port.postMessage({ t: 'dispose' }); node.port.close(); try { node.disconnect(); } catch (e) { /* */ } }
-      [input, dry, wet, output].forEach(function (n) { try { n.disconnect(); } catch (e) { /* */ } });
+      [input, dry, wet, output, modInput].forEach(function (n) { try { if (n) n.disconnect(); } catch (e) { /* */ } });
     }
   };
   return core;

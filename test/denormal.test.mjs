@@ -14,8 +14,8 @@ const PROG = [1, 12, -3, 0.8, 1, 0.75, 0.5, 0.4, 1, 0.02, 0.6, 0.7, 0.3, 0.35];
 const DOWN = [[P.DRIVE_ON, 0], [P.DELAY_ON, 0], [P.PLATE_ON, 0], [P.DRIVE_MIX, 0], [P.DELAY_MIX, 0],
   [P.DELAY_FEEDBACK, 0], [P.PLATE_MIX, 0], [P.PLATE_PREDELAY, 0], [P.PLATE_DAMPING, 0]];
 
-for (const bypassMode of ['run', 'hold']) {
-  test(`60 s of silence after turning everything down: µs/block doesn't climb (bypass ${bypassMode})`, () => {
+for (const [bypassMode, withMod] of [['run'], ['hold'], ['run', true]]) {
+  test(`60 s of silence after turning everything down: µs/block doesn't climb (bypass ${bypassMode}${withMod ? ', mod input present' : ''})`, () => {
     const mk = () => {
       const fx = createFxDsp(48000, { limiter: 'soft', bypassMode });
       fx.load(PROG, 0, true);
@@ -23,10 +23,12 @@ for (const bypassMode of ['run', 'hold']) {
     };
     const fx = mk(), ctl = mk();
     const b = new Float32Array(128), c = new Float32Array(128);
+    // With the mod input present (PR A): both engines get the same silent CV, so the ratio still isolates denormals.
+    const m = withMod ? new Float32Array(128) : null;
     let f = 0;
     for (let k = 0; k < 2000; k++) {
       for (let i = 0; i < 128; i++) b[i] = c[i] = Math.sin((f + i) * 0.05) * 0.5;
-      fx.process(b, null, b, null, 128, f); ctl.process(c, null, c, null, 128, f); f += 128;
+      fx.process(b, null, b, null, 128, f, m); ctl.process(c, null, c, null, 128, f, m); f += 128;
     }
     for (const [i, v] of DOWN) { fx.set(i, v); ctl.set(i, v, 0, true); }
     const W = 375 * 5, ratios = [];
@@ -36,11 +38,11 @@ for (const bypassMode of ['run', 'hold']) {
       b.fill(0); c.fill(0);
       let a;
       if (k & 1) {
-        a = now(); fx.process(b, null, b, null, 128, f); ta.push(now() - a);
-        a = now(); ctl.process(c, null, c, null, 128, f); tc.push(now() - a);
+        a = now(); fx.process(b, null, b, null, 128, f, m); ta.push(now() - a);
+        a = now(); ctl.process(c, null, c, null, 128, f, m); tc.push(now() - a);
       } else {
-        a = now(); ctl.process(c, null, c, null, 128, f); tc.push(now() - a);
-        a = now(); fx.process(b, null, b, null, 128, f); ta.push(now() - a);
+        a = now(); ctl.process(c, null, c, null, 128, f, m); tc.push(now() - a);
+        a = now(); fx.process(b, null, b, null, 128, f, m); ta.push(now() - a);
       }
       f += 128;
       for (let i = 0; i < 128; i++) if (b[i] !== 0 && Math.abs(b[i]) < 1.1754943508222875e-38) sub++;

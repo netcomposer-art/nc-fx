@@ -24,12 +24,20 @@ export interface FxCoreOptions {
   crossfade?: number;
   /** Longest delay time in seconds; sizes the delay line (~0.4 MB per second at 48 kHz). Default 4.9, max 60. */
   maxDelaySeconds?: number;
+  /**
+   * Opt-in mod input: `fx.modInput` becomes a mono GainNode wired to the worklet's second input, for a control
+   * signal such as Bass's accent CV (channel 0 of what is connected). Default false: one input, as before.
+   * Nothing is routed from it yet, so the sound is bit-identical with or without it; later dials set its depths.
+   */
+  modInput?: boolean;
 }
 export interface FxChange { effect: FxEffectType | null; key: string | null; value: number | boolean | null }
 
 export interface FxCore {
   readonly input: GainNode;
   readonly output: GainNode;
+  /** The mod input (`modInput: true`), else null. Mono, channelCountMode 'explicit', 'discrete'. */
+  readonly modInput: GainNode | null;
   /** Resolves once the chain is in the path, or it gave up (status 'unavailable'). Never rejects. */
   readonly ready: Promise<void>;
   /**
