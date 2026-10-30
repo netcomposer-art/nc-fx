@@ -151,6 +151,8 @@ function createHost(ctx, o, start, fold) {
     get error() { return H.error; },
     /** Samples the chain delays the signal by (the lookahead limiter's 1.5 ms; 0 for 'soft'/'off'). */
     latencySamples: limiter === 'lookahead' ? Math.max(1, Math.round(0.0015 * ctx.sampleRate)) : 0,
+    /** The limiter after the chain: 'off', 'soft' or 'lookahead'. */
+    limiter: limiter,
     /** Host tempo (BPM) for the synced delay, optionally at an AudioContext time (at most 600 s ahead). */
     setTempo: function (nextBpm, at) {
       var b = finiteOr(nextBpm, NaN);

@@ -62,6 +62,7 @@ export interface FxCore {
   readonly status: 'loading' | 'ready' | 'unavailable' | 'disposed';
   readonly error: unknown;
   readonly latencySamples: number;
+  readonly limiter: 'off' | 'soft' | 'lookahead';
   /** A dial in UI units, or key 'bypass' with a boolean. at = AudioContext time. Returns the stored value. */
   setParam(effect: FxEffectName, key: string, value: number | boolean, at?: number): number | boolean | undefined;
   getParam(effect: FxEffectName, key: string): number | boolean | undefined;
