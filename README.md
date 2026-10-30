@@ -2,15 +2,26 @@
 
 nc-fx was created by [Peter Semmelhack](https://psem.me/).
 
-**NetComposer's shared effects chain for instruments: drive → tempo-synced delay → plate reverb → limiter.**
-These are ASTRID's Hacks, moved into a package so that Rhythm, Bass and ASTRID all use the same code.
+**NetComposer's one effects module: ASTRID's whole Hacks catalog, for every instrument and the Studio's Mix.**
+Drive, tempo-synced delay, plate reverb, EQ, compressor, width, flanger, chorus, phaser and (hidden, for old presets)
+low-, high- and band-pass filters, moved out of ASTRID into a package so that ASTRID, Bass, Rhythm and the Studio all
+use the same code. Two ways to chain them, both ending in the pre-gain and a limiter fixed last:
+
+- **The fixed chain** (the default): drive → delay → reverb, each on or off. Unchanged since 0.1.0.
+- **ASTRID's chain model** (`slots`): up to N effects (3 by default, as ASTRID) of any type, in any order the player
+  picks, added, removed and reordered without a click. See [Chain model](#chain-model-slots).
 
 - **Framework-free.** Plain ES modules, types included, and no runtime dependencies. nc-clock and nc-ui are
   optional and never imported.
-- **Sounds the same as ASTRID.** The DSP is a port of ASTRID's `hacks-vendor/dsp.js` and renders identical samples
-  for the same settings, with ASTRID's master options (`limiter: 'lookahead', preGain: 0.8`), including dial and
-  tempo changes while playing. A test checks this against ASTRID's own file. The few deliberate differences are
-  listed in [Differs from ASTRID](#differs-from-astrid).
+- **Sounds the same as ASTRID.** Every effect is a port of ASTRID's code (the site's `hacks-vendor/dsp.js` and
+  ASTRID's own `hacks-astrid/mod.js`) and renders identical samples for the same settings, with ASTRID's master
+  options (`limiter: 'lookahead', preGain: 0.8`), including dial and tempo changes while playing and adding,
+  removing and reordering effects while playing. The tests check this against ASTRID's own shipped worklet. The few
+  deliberate differences are listed in [Differs from ASTRID](#differs-from-astrid).
+- **Loads ASTRID's saves.** ASTRID's presets, snapshots, autosaves and files (its saved hacks) load exactly as
+  ASTRID loads them, and export back unchanged ([State](#state-v1-and-v2-and-astrids-saves)).
+- **One catalog.** Every effect's dials (labels, ranges, defaults, options, laws, readouts) are plain data, checked
+  against ASTRID's `hacks.ts` ([Catalog](#catalog)). The panel and any host UI are generated from it.
 - **Real-time safe.** Nothing allocates on the audio thread: no allocation in `process()` and none for a parameter,
   tempo, bypass or clear event. A heap-delta gate (fixed young generation, one process per scenario) holds this at
   0 B, and a 60 s silence test checks that denormals can't creep in. All timing runs on the audio clock and is
@@ -18,7 +29,8 @@ These are ASTRID's Hacks, moved into a package so that Rhythm, Bass and ASTRID a
 - **Transparent by default.** With every effect bypassed and default options, the output is the input, bit for bit.
   The limiter and pre-gain are opt-in (see [Defaults and each app's choice](#defaults-and-each-apps-choice)).
 - **Small API.** The state is JSON-serialisable. The API is approved (Zeta's review, 2026-10-27).
-- **Optional panel.** The UI is ultra-minimal, built on nc-ui tokens, and lazy-loaded.
+- **Optional panel.** Each effect is the nc-ui kit's FX card, so it looks the same in every app; with `slots` it is
+  ASTRID's Hacks panel ("Add a hack", move up / down, remove). Lazy-loaded; nc-ui is never imported.
 
 MIT licensed. The package name is `@netcomposer/nc-fx`. It isn't published to npm; install it from git.
 
@@ -75,6 +87,18 @@ The defaults change nothing you didn't ask for:
 | `maxDelaySeconds` | `4.9` | The longest delay (ASTRID's). The delay line is sized from it (about 0.4 MB per second at 48 kHz); up to 60. |
 | `modInput` | `false` | `true` adds `fx.modInput`: a mono input for a control signal (CV, e.g. Bass's accent), channel 0 of whatever you connect (it is `'discrete'`, so a stereo source keeps only its channel 0; see [Mod input wiring](#mod-input-wiring)). The drive's Accent → drive / tone and the delay's Accent → send dials set how much it moves; at 0 (the default) the sound is the same, and so is a connected-but-silent (or never-connected) input. |
 
+**CPU per effect** (`node test/bench/effects-cpu.mjs`: one effect on in the slot engine, 128-frame stereo blocks at
+48 kHz, Node 22 on the CI-class machine this was written on, medians; the empty chain is 2.9 µs):
+
+| Effect | µs / block | Effect | µs / block | Effect | µs / block |
+|---|---|---|---|---|---|
+| Reverb | 70.2 | Chorus | 29.7 | Low-pass | 14.5 |
+| Phaser | 40.6 | Compressor | 14.2 | Flanger | 13.5 |
+| Drive (12 dB) | 34.3 | Delay | 10.7 | Band-pass | 9.6 |
+| EQ | 8.5 | Width | 5.8 | High-pass | 5.5 |
+
+A block is 2667 µs at 48 kHz, so three of the heaviest (reverb, phaser, drive) use about 5 % of the audio thread.
+
 **CPU: use `'hold'` if you don't need tails across bypass.** With `'run'` a fully bypassed chain still costs nearly
 everything: in Petra's bench, 78 of 89 µs per 128-frame block. `'run'` is the default only because it is ASTRID's
 behaviour.
@@ -106,13 +130,20 @@ of effects. Today the engine keeps per-block peaks and `takeGainReduction()` for
 
 ## Effects
 
-Effects run in a fixed order. Each one has On/Off (bypass) and a mix:
+Every effect has On/Off (bypass). In the fixed chain the order is drive → delay → reverb; with `slots` any order.
 
-| Effect | Dials (UI units) | From ASTRID |
+| Effect (`type`) | Dials (UI units) | From ASTRID |
 |---|---|---|
 | **Drive** (`drive`) | Drive 0–24 dB (0 = clean; 0.1 dB steps in Acid), Output −12…+12 dB, Mix 0–100 %, Curve Smooth / Acid, Tone 0–100 (100 = off), Accent → drive and Accent → tone −100…+100 % | Smooth is `ncDrive*`: tanh with first-order ADAA, level-compensated. Acid is ASTRID-Bass's drive, bit-exact (below) |
 | **Delay** (`delay`) | Timing 1/32, 1/16, 1/8, 1/8 dotted, 1/4, 1/4 dotted, 1/2 (tempo-synced, max 4.9 s); Feedback 0–90 %; Wet/dry (`mix`) 0–100 %; Tone 0–100 (100 = off); Low cut 0–1000 Hz (0 = off); Mode Insert / Send; Send 0–100 %; Accent → send −100…+100 %; Free time 0–2 beats (0 = off) | `ncDelay*`: a stereo tap with linear interpolation and an 80 ms glide on time changes. Send mode is ASTRID-Bass's delay, bit-exact (below) |
 | **Reverb** (`plate`, alias `reverb`) | Pre-delay 0–200 ms, Size 0–100 (0.5×–1.5×), Decay, Damping, Mix 0–100 % | `ncPlate*`: Dattorro plate (JAES 1997) |
+| **EQ** (`eq`) | Low, Mid, High −18…+18 dB; Mid at 0–100 (200 Hz–5 kHz); Mid Q 0–100 (0.3–6) | `ncEq*`: RBJ low shelf 150 Hz, bell, high shelf 6 kHz; flat is a wire |
+| **Compressor** (`compressor`) | Threshold −60…0 dB, Ratio 0–100 (1:1–20:1), Attack 1–100 ms, Release 10–1000 ms, Makeup 0–24 dB | `ncComp*`: feed-forward, stereo-linked, 6 dB soft knee |
+| **Width** (`width`) | Width 0–200 %, Balance L100…R100 | `ncWidth*`: mid/side |
+| **Flanger** (`flanger`) | Rate 0–100 (0.05–10 Hz), Depth, Feedback −90…+90 %, Mix | ASTRID's `hacks-astrid/mod.js` |
+| **Chorus** (`chorus`) | Rate, Depth, Spread, Mix | ASTRID's `hacks-astrid/mod.js`: three voices |
+| **Phaser** (`phaser`) | Rate, Depth, Stages 4 / 6 / 8, Feedback 0–90 %, Mix | ASTRID's `hacks-astrid/mod.js` |
+| Low-pass, High-pass, Band-pass filter (`lowpass`, `highpass`, `bandpass`) | Cutoff (and Resonance) / Centre, Q, Mix | `ncLowpass*`, `ncPass*`. Hidden as in ASTRID: not offered in "Add", but old presets load, play, show and can be removed |
 | Limiter (fixed, last) | `limiter: 'off'` (default) · `'soft'` (zero latency, linear to −6 dBFS, then a soft knee toward −1 dBFS) · `'lookahead'` (−1 dB ceiling, 1.5 ms latency); `preGain` 1 (default; ASTRID 0.8) | `ncLimiter*` and the 0.8 pre-gain from `ncRender` |
 
 ### Limiter gain
@@ -155,6 +186,17 @@ samples exactly.
   test is still identical.
 - **Options and defaults.** `bypassMode: 'hold'` and `maxDelaySeconds` beyond 4.9 s are opt-in extras. The defaults
   `limiter: 'off'` and `preGain: 1` are not ASTRID's master (`'lookahead'` and 0.8): pass those to match it.
+- **The new effects follow the same rules.** EQ, compressor, width, flanger, chorus, phaser and the filters use the
+  smooth bypass crossfade and the denormal snap above (their rate, depth, feedback, filter-open and on/off
+  smoothers, which ASTRID never snaps), and `bypassMode: 'hold'` (switching one back on after a full sleep starts it
+  from cleared state). At rest and through every dial change they are bit-identical to ASTRID.
+- **Slot chain edges** (`slots`). An effect whose type changes under the same id comes in as a new effect through
+  the 4 ms chain fade; ASTRID swaps it in place at once (a click). Up to 8 slots (ASTRID 3, the site 10). The site's
+  piece-position "filter arrows" (`ncApplyGlide`) are not ported: ASTRID never sends them. An empty chain still runs
+  the pre-gain and limiter; ASTRID routes around its worklet when it has no hacks (an app choice, see below).
+- **Matched, but worth knowing (ASTRID's own behaviour, kept for parity):** a second reorder during the 4 ms fade-in
+  of the first restarts the fade-out from full level (a step of up to the fade's depth); an instant clear during a
+  reorder drops the reorder, so the old order keeps playing (ASTRID's UI then shows the new one).
 - **Kept as in ASTRID (Peter's call):** the drive's one-sample dip when `drive_db` moves off 0 while the drive is
   on. At 0 dB the drive is a clean wire and its antialiasing state is held at zero, so the first driven sample is
   averaged against that zero (DC 0.5 in gives one sample of 0.25). Switching the drive on is not affected: the
@@ -205,8 +247,70 @@ Delay (indexes 18–23, all off / ASTRID at their defaults):
   lengths guarantee exactness past 4 s (`maxDelaySeconds: 191991.5 / 48000` matches Bass's 4 s line at 48 kHz). The
   6 s probe is exact with that and also with the default 4.9 s line; the test allows < 1e-6 for the default.
 
-**Coming next** (a later PR, from the rest of ASTRID's chain): low-, high- and band-pass filters, a 3-band EQ,
-compressor, width, flanger, chorus and phaser. Also planned: user-reorderable slots.
+## Chain model (`slots`)
+
+```js
+const fx = createFx(ctx, { slots: true, limiter: 'lookahead', preGain: 0.8, state: settings.hacks }); // ASTRID's
+const id = fx.addEffect('chorus');          // 'chorus-1' (undefined when the chain is full)
+fx.setParam(id, 'mix', 30);                 // or fx.setParam('chorus', ...): the first chorus
+fx.moveEffect(id, 0);                       // first in the chain
+fx.removeEffect('eq-1');
+fx.getChain();                              // [{ id, type, name: 'Chorus', bypass }]
+save({ hacks: fx.toAstrid().hacks });       // ASTRID's own shape, or fx.getState() (v2)
+```
+
+`slots: true` gives ASTRID's three; a number gives 1–8. Each effect has an id (`delay-1`, `drive-2`, named "Drive 2"
+on screen, as in ASTRID). The engine is ASTRID's chain, step for step:
+
+- **Add, remove, reorder** go out as ASTRID's `HackOutput.sync` sends them: an add (the new effect's dials snapped),
+  then the order, then a param for each changed dial. A new order is ASTRID's `ncChainOrder` / `ncFade` / `ncKeep`: the
+  chain's output fades down over 4 ms (raised cosine), the new order takes over, and fades back up. No click, and
+  no change in sound at rest: `test/astrid-catalog-parity.test.mjs` and `test/slot-core.test.mjs` hold a sequence of
+  adds, moves, removes, dial and preset changes bit-identical to ASTRID's chain fed the same edits.
+- **`setState`** (any saved chain) is the same diff, so loading a preset while playing is click-free.
+- **Timed.** Every call takes `at` (AudioContext time), and calls made before the worklet is ready queue and replay
+  as in the fixed chain.
+- **Memory.** Effects live in a pool of 2N + 2 boxes (the order playing, the next order and adds in flight). The
+  first time a box holds a type it allocates that effect's memory (on the message, not in `process()`); after that,
+  adding, removing and reordering reuse it. A delay is 1.9 MB at 48 kHz, a reverb 0.3 MB, the others a few KB.
+- **Inside your own worklet:** `createFxChainDsp(sampleRate, { slots })` from `@netcomposer/nc-fx/chain`, with
+  `add(uid, type, frame)`, `set(uid, k, value, frame, snap)` (k from the catalog), `order(uids, frame, immediate)`,
+  `setTempo`, `clear`, `process`, as `createFxDsp`.
+
+### State: v1 and v2, and ASTRID's saves
+
+- **v1** `{ v: 1, chain: [drive, delay, plate] }`: the fixed chain, unchanged.
+- **v2** `{ v: 2, chain: [{ id, type, bypass, dials }] }`: the slot chain, first to last.
+
+`migrateSlots(raw, max)` (and `setState`, and `opts.state` with `slots`) takes v2, v1 (its three effects become
+three slots, as they play), and ASTRID's saves:
+
+- **ASTRID's saved hacks** (`HackSlot[]`, `settings.hacks` in presets, snapshots, autosaves and files), sanitised
+  exactly as ASTRID's `sanitizeHacks` does (500 fuzzed saves agree): the first three known hacks, ids kept when valid
+  and unique, bypass only when `true`, each dial through `dialValue`. An odd saved Timing plays ASTRID's note.
+- **ASTRID's widgets** (`HackWidget[]`, params in DSP units) and the site's **schema-2 document**: each param back
+  to its dial through the inverse of `hacks.ts`'s law (exact for every dial value). The site's first EQ voicing
+  (saves from before 2026-10-21, no `low_hz`) is reported in `notes`.
+
+It returns `{ state, dropped, notes }`. Export: `toAstridHacks(state)` gives ASTRID's `HackSlot[]` (round trip
+lossless for every ASTRID setting) and `lossy`, what ASTRID can't hold (nc-fx's own dials away from their
+defaults, a 1/32 delay, a fourth slot); `toAstridDocument(state, tempo)` gives the schema-2 document, equal to
+`hacks.ts` `hackChainDocument`.
+
+## Catalog
+
+`CATALOG` (from `@netcomposer/nc-fx` or `/catalog`, and `describeCatalog()` for a copy) is every effect as plain
+JSON, in ASTRID's order: `{ type, label, hidden?, note?, tempoSynced?, dials }`, each dial
+`{ key, label, min, max, default, step, unit, k, options?, more?, dsp?, format, astridKey?, stepWhen?, ... }`.
+
+- `format` is the readout as data (`{ fmt: 'hz', law, astrid: true }`, `{ fmt: 'tempoMs' }`, ...), rendered by
+  `formatDial(dial, value, bpm)`; every readout at every dial value and several tempos equals ASTRID's `format()`.
+- `dsp` is the law from the dial to the engine (`{ div: 100 }`, `{ law: { pow: [0.05, 200], div: 100, fixed: 3 } }`,
+  ...), equal to `hacks.ts` `hackParams` at every dial value. `k` is the engine param.
+- `more: true` marks nc-fx's own dials (drive Curve, Tone, accent depths; delay Tone, Low cut, Mode, Send, accent,
+  Free time): the panel puts them under "More"; their defaults are ASTRID's sound.
+- `CATALOG_MENU` is "Add a hack": Delay, Reverb, Flanger, Chorus, Phaser, EQ, Drive, Compressor, Width.
+- `EFFECTS` (the fixed chain's three, with `format(value, bpm)` functions) is derived from it, unchanged.
 
 ## API
 
@@ -299,6 +403,10 @@ values equal to the ones already scheduled (unless `snap`).
 
 ### Also exported
 
+- With `slots`: `addEffect`, `removeEffect`, `moveEffect`, `getChain`, `toAstrid`, and `slots` (see
+  [Chain model](#chain-model-slots)); `CATALOG`, `CATALOG_MENU`, `catalogEntry`, `catalogDial`, `formatDial`,
+  `describeCatalog`; `migrateSlots`, `sanitizeSlots`, `newSlot`, `slotName`, `moveSlot`, `toAstridHacks`,
+  `toAstridDocument`, `SLOTS_VERSION`. Every core has `limiter` ('off', 'soft' or 'lookahead').
 - `migrate(raw) → {state, dropped}`, `sanitize`, `defaultState`, `EFFECTS` (dial metadata with formatters),
   `EFFECT_ORDER`, `loadFxWorklet(ctx, url?)` and `PROCESSOR_NAME` (`'nc-fx@1'`).
 - `compile(state) → Float64Array` and `dialToDsp(type, key, value)`, for hosts that run the engine themselves.
@@ -325,9 +433,25 @@ The processor is registered once per context, as `nc-fx@1`, so several instances
 
 ## Panel looks and motion
 
-- **Colour.** Colour comes only from nc-ui tokens: `--nc-ui-accent` (On, slider fill), `--nc-ui-text`,
-  `--nc-ui-text-sub`, `--nc-ui-module-bg-stack-2` and `--nc-ui-focus-ring`. The only fallback is `currentColor`, and
-  there are no hardcoded colours. Load nc-ui's tokens and the panel follows the theme.
+- **Module shading.** As ASTRID's VCO → VCF → VCA modules step darker left to right, the FX stack steps darker top
+  to bottom, on nc-ui's stack ramp (docs/design-rules.md "Module shading"): the panel is stack-1, the first card
+  stack-2, the second stack-3, the third and deeper stack-4, each with that step's text-sub, divider and slider
+  track (the kit's own rules). Depth follows the card's position, not its type, so adding, removing or moving a
+  card re-shades the stack at once; the fixed chain is the same (Drive, Delay, Reverb: 2, 3, 4). The Add row and
+  the limiter line sit on the panel's stack-1.
+- **The kit's FX cards.** Each effect is the markup of nc-ui's `renderControl({ type: 'fx' })` (north-star): a
+  `.nc-ui-fx` card with `data-nc-depth`, a header with
+  the name and a `role="switch"` On / Off named by it (`aria-checked`; the card dims by `data-nc-dim` when off), the
+  kit's slider, select and note fields (solid thumbs), and "More" (`details.nc-ui-more`) for nc-fx's own dials. The
+  live nc-ui stylesheet (`/nc-ui/nc-ui.css`) styles it, so it looks the same in every app; nc-fx never imports nc-ui.
+  Mount it inside a kit module: the panel is the kit's inset section (`.nc-section[data-nc-inset]`), so it bleeds to
+  the module's edges and its cards to the panel's, as ASTRID's Hacks panel in VCA.
+- **ASTRID's Hacks panel** with `slots`: "Add a hack" (ASTRID's menu and order; the hidden filters are not offered,
+  but an old preset's filter shows and can be removed; "3 of 3" and disabled when full), ▲ ▼ and × on each card,
+  and "Limiter −1 dB, fixed last" under the cards.
+- **Colour and length.** `src/ui-style.js` only lays out what the kit has no class for (the Add row, the move and
+  remove buttons, select rows as label + value over the select, the limiter line), with nc-ui custom properties
+  only: no colours, no px (the tests lint it). Screenshots: 1440 and 390 px against the live sheet in the PR.
 - **Motion.** Sliders that the host moves (automation, modulation, a loaded state) are marked `data-modulated` and
   never animate. One-off feedback uses nc-ui's motion roles (150 ms) and turns off under
   `prefers-reduced-motion`. The tests lint both rules.
@@ -337,8 +461,10 @@ The processor is registered once per context, as `nc-fx@1`, so several instances
 ```sh
 npm ci
 npm run build          # regenerate dist/ after editing src/dsp.js, src/processor.js or src/ui-style.js
-npm test               # node tests (params, state round-trip, DSP, ASTRID parity, allocation, host, style)
+npm test               # node tests (params, catalog, state, DSP, ASTRID and Bass parity, allocation, denormals, host, style)
 npm run test:browser   # headless Chrome: a real AudioWorklet in an OfflineAudioContext, plus the panel
+                       # (PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs for a Playwright that has its browsers)
+node test/bench/effects-cpu.mjs   # µs per 128-frame block, per effect
 npm run typecheck
 npm run size
 ```

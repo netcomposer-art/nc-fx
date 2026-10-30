@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+**ASTRID's whole Hacks catalog, movable slots, ASTRID's saves, kit FX cards** (fx/astrid-catalog):
+
+- **Every ASTRID hack.** EQ, compressor, width, flanger, chorus, phaser, and the hidden low-, high- and band-pass
+  filters (old presets load, play, show and can be removed; not offered in Add), ported from ASTRID's shipped
+  worklet (NetComposer-Synth 7292c57). Bit-identical to it at every type's defaults, dial ends and random dials, in
+  40 random three-hack chains, with every dial moved while playing, and through tempo changes.
+- **ASTRID's chain model.** `createFxCore(ctx, { slots })` (and `createFxChainDsp` from `/chain`): up to N effects
+  (default 3, max 8) of any type in any order; `addEffect`, `removeEffect`, `moveEffect`, `getChain`, `toAstrid`.
+  Add, remove and reorder follow ASTRID's `ncChainAdd` / `Order` / `Keep` / `Fade` (a 4 ms chain fade, no click),
+  bit-identical to ASTRID fed the same edits, through the real worklet too. The fixed chain is unchanged.
+- **State v2** (`/slots`): `{ v: 2, chain }`. Loads ASTRID's saved hacks exactly as `sanitizeHacks` does, its
+  widgets and the site's schema-2 documents (laws inverted exactly), and v1; exports back to ASTRID's shape and
+  schema 2, losslessly for anything ASTRID can hold (the rest is reported).
+- **Catalog** (`/catalog`): every effect's dials as plain data (labels, ranges, defaults, options, laws, readout
+  formats including tempo-dependent ones), checked against `hacks.ts` at every dial value; `formatDial`,
+  `describeCatalog`, `CATALOG_MENU`. `EFFECTS` is derived from it (all readouts and `describeParams()` unchanged).
+- **Panel on the nc-ui kit.** Each effect is the kit's FX card (`.nc-ui-fx`, `role="switch"` On / Off, kit fields,
+  "More" for nc-fx's own dials), styled by the live nc-ui sheet; nc-ui is not imported. With `slots`, ASTRID's Hacks
+  panel: "Add a hack", ▲ ▼ and × per card, the limiter line. The panel's own CSS is nc-ui custom properties only.
+  The On / Off control is now a switch (`aria-checked`, was a button with `aria-pressed`).
+- **Module shading (Peter).** The FX stack steps darker top to bottom as ASTRID's VCO → VCF → VCA modules do left to
+  right, on nc-ui's stack ramp: the panel (the kit's inset section) is stack-1, the cards stack-2, -3, -4 by position
+  (the fixed chain too), re-shading at once on add, remove or move; the Add row and limiter line stay on stack-1.
+  The browser tests load a pinned copy of the nc-ui sheet (north-star 0f26793) and check the computed backgrounds.
+- **Engine.** Drive, delay and plate are now instantiable units (`src/units.js`) shared by both chains; no change in
+  sound (every parity test bit-identical). Heap-delta gates: 0 B for every effect with its dials, bypass and tempo
+  moving; adding / reordering costs at most a few boxed numbers per add on the control path, no GC. 60 s denormal
+  gates for every effect. `core.limiter` tells the panel which limiter runs.
+- Docs: "Differs from ASTRID" covers the new effects and the slot chain's edges.
+
+
 - Docs: "Differs from ASTRID" now lists that the instant `clear()` leaves the limiter alone (ASTRID's
   `ncChainClear` rebuilds it), and the drive dip is described correctly: it happens when `drive_db` moves off 0
   with the drive on, not when the drive is switched on (Zeta).

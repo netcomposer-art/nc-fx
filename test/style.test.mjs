@@ -42,3 +42,13 @@ test('motion: only through nc-ui roles, 100-250 ms fallbacks, off when modulated
   assert.match(FX_UI_CSS, /@media \(prefers-reduced-motion:reduce\)\{\.nc-fx,\.nc-fx \*\{transition:none;animation:none\}\}/);
   assert.ok(!/input\[type=range\][^{]*\{[^}]*transition/.test(FX_UI_CSS), 'sliders never animate');
 });
+
+test('panel CSS: nc-ui custom properties only (no px, no colours); the kit\'s markup; nc-ui is never imported', () => {
+  assert.ok(!/\d+px\b/.test(FX_UI_CSS), 'raw px');
+  assert.ok(!/\b\d*\.?\d+(rem|em|pt|vh|vw)\b/.test(FX_UI_CSS), 'raw lengths');
+  for (const m of FX_UI_CSS.matchAll(/var\((--[\w-]+)/g)) assert.ok(m[1].startsWith('--nc-ui-'), m[1]);
+  for (const cls of ['nc-ui-fx', 'nc-ui-fx-hd', 'nc-ui-fx-name', 'nc-ui-switch', 'nc-ui-switch-text', 'nc-ui-more', 'nc-field', 'nc-label', 'nc-readout', 'nc-range', 'nc-select', 'nc-note', 'nc-token-probe'])
+    assert.ok(ui.includes(`'${cls}'`) || ui.includes(`'${cls} `) || ui.includes(` ${cls}'`), cls);
+  for (const attr of ['data-nc-depth', 'data-nc-dim', 'data-nc-fx-switch', 'data-nc-slider', 'data-nc-row', 'data-nc-readout', 'data-nc-on', 'data-nc-off', "'role', 'switch'", "'aria-checked'"]) assert.ok(ui.includes(attr), attr);
+  assert.ok(!/from ['"]@netcomposer\/nc-ui/.test(ui) && !/import\(['"]@netcomposer\/nc-ui/.test(ui), 'no nc-ui import');
+});

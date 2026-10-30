@@ -22,3 +22,15 @@ dsp.set(FX_PARAM.DELAY_MIX, 0.3);
 applyTempoMap(fx, { points: [{ beat: 0, bpm: 120 }], timeAt: (b) => b / 2 }, { toBeat: 16 });
 followClock(fx, { onChange: () => () => {}, transport: { tempo: { bpmAt: () => 120 }, timeAt: (b) => b, beatAt: (t) => t } });
 void EFFECTS.map((e) => e.dials.map((d) => d.format(d.default, 120)));
+// Slot mode (ASTRID's chain model) and the catalog.
+import { createFxCore as core2, CATALOG, formatDial, migrateSlots, toAstridHacks, type FxSlotState } from '../../src/index.js';
+import { createFxChainDsp } from '../../src/chain.js';
+const slots = core2(ctx, { slots: true, state: [{ id: 'eq-1', type: 'eq', bypass: false, dials: { low_db: 3 } }] });
+const id: string | undefined = slots.addEffect('chorus', { index: 0 });
+if (id) { slots.setParam(id, 'mix', 30); slots.moveEffect(id, 1); slots.removeEffect(id); }
+const st: FxSlotState = slots.getState();
+void toAstridHacks(st).hacks.map((h) => h.dials);
+void migrateSlots([]).dropped;
+void CATALOG.map((e) => e.dials.map((d) => formatDial(d, d.default, 120)));
+const chainDsp = createFxChainDsp(48000, { slots: 3, limiter: 'lookahead' });
+chainDsp.add(1, 'phaser'); chainDsp.order([1]);

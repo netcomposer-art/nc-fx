@@ -1,6 +1,8 @@
 // Runs in headless Chrome: real AudioWorklet in an OfflineAudioContext, plus the panel in a real DOM.
 import { createFxCore, createFx, defaultState, compile } from '../../src/index.js';
 import { createFxDsp } from '../../src/dsp.js';
+import { createFxChainDsp } from '../../src/chain.js';
+import { sanitizeSlots, slotProgram } from '../../src/slots.js';
 
 const SR = 48000, N = SR; // 1 s
 const results = [];
@@ -139,7 +141,7 @@ async function main() {
     await fx.ready;
     const panel = await fx.mount(document.getElementById('panel'));
     const slider = document.querySelector('[data-testid="nc-fx-plate-mix"]');
-    check('panel renders 3 sections', document.querySelectorAll('.nc-fx-sec').length === 3);
+    check('panel renders 3 kit FX cards', document.querySelectorAll('.nc-ui-fx').length === 3);
     const dsl = document.querySelector('[data-testid="nc-fx-drive-drive_db"]'), curveSel = document.querySelector('[data-testid="nc-fx-drive-curve"]');
     const step0 = dsl.step;
     curveSel.value = '1'; curveSel.dispatchEvent(new Event('change'));
@@ -155,13 +157,10 @@ async function main() {
     fx.setParam('plate', 'mix', 10);
     check('host-moved slider is marked data-modulated', slider.hasAttribute('data-modulated') && slider.value === '10');
     check('modulated slider has no transition', getComputedStyle(slider).transitionDuration.split(',').every((t) => parseFloat(t) === 0));
-    const btn = document.querySelector('[data-testid="nc-fx-plate"] .nc-fx-on');
+    // The kit's On / Off switch (role=switch, aria-checked); its colours and motion are the live nc-ui sheet's.
+    const btn = document.querySelector('[data-testid="nc-fx-plate"] .nc-ui-switch');
     btn.click();
-    await new Promise((r) => setTimeout(r, 400)); // let the 150 ms colour feedback finish
-    check('On/Off toggles bypass', fx.getParam('plate', 'bypass') === false && btn.getAttribute('aria-pressed') === 'true');
-    check('accent comes from --nc-ui-accent', getComputedStyle(btn).color === 'rgb(18, 52, 86)', getComputedStyle(btn).color);
-    const fb = getComputedStyle(btn).transitionDuration.split(',').map(parseFloat);
-    check('one-off feedback motion is 100-250 ms', fb.every((t) => t >= 0.1 && t <= 0.25), fb);
+    check('On/Off toggles bypass', fx.getParam('plate', 'bypass') === false && btn.getAttribute('aria-checked') === 'true' && btn.getAttribute('role') === 'switch');
     check('delay readout shows ms at the tempo', document.querySelector('[data-testid="nc-fx-delay"] output').textContent === '375 ms');
     fx.setTempo(90);
     check('readout follows the tempo', document.querySelector('[data-testid="nc-fx-delay"] output').textContent === '500 ms');
@@ -172,6 +171,7 @@ async function main() {
       off0 === 'off' && !ov0 && freeSl.step === '0.001' && fx.getParam('delay', 'beats_free') === 0.3 && freeRow.querySelector('output').textContent === 'free 0.3 beats \u00b7 200 ms'
       && freeRow.hasAttribute('data-free') && timRow.hasAttribute('data-overridden') && timRow.querySelector('output').textContent === 'free time',
       [off0, freeRow.querySelector('output').textContent, timRow.querySelector('output').textContent]);
+    check('accent comes from --nc-ui-accent (Free time readout)', getComputedStyle(freeRow.querySelector('output')).color === 'rgb(18, 52, 86)', getComputedStyle(freeRow.querySelector('output')).color);
     fx.setParam('delay', 'beats_free', 0);
     check('panel: Free time off gives the Timing select back', !timRow.hasAttribute('data-overridden') && timRow.querySelector('output').textContent === '500 ms' && !freeRow.hasAttribute('data-free'));
     check('panel: delay Mode select and 1/32 option', document.querySelector('[data-testid="nc-fx-delay-mode"]').tagName === 'SELECT' && [...document.querySelector('[data-testid="nc-fx-delay-delay_beats"]').options].some((o) => o.textContent === '1/32'));
@@ -183,6 +183,108 @@ async function main() {
     fx2.dispose();
     const late = await pending;
     check('dispose during mount leaves no panel', !document.querySelector('.nc-fx') && !!late && typeof late.destroy === 'function');
+  }
+
+  // Slot mode (ASTRID's chain model) in the real AudioWorklet: an ASTRID preset plays what the engine renders here.
+  {
+    const preset = [
+      { id: 'phaser-1', type: 'phaser', bypass: false, dials: { rate: 55, depth: 80, stages: 8, feedback: 40, mix: 50 } },
+      { id: 'eq-1', type: 'eq', bypass: false, dials: { low_db: 6, mid_db: -5, mid_hz: 30, mid_q: 50, high_db: 3 } },
+      { id: 'delay-1', type: 'delay', bypass: false, dials: { delay_beats: 0.5, feedback: 50, wet: 35 } },
+    ];
+    const ctx = new OfflineAudioContext(2, N, SR);
+    const buf = ctx.createBuffer(2, N, SR); buf.copyToChannel(inL, 0); buf.copyToChannel(inR, 1);
+    const src = ctx.createBufferSource(); src.buffer = buf;
+    const fx = createFxCore(ctx, { slots: true, state: preset, limiter: 'lookahead', preGain: 0.8 });
+    await fx.ready;
+    src.connect(fx.input); fx.output.connect(ctx.destination); src.start(0);
+    const out = await ctx.startRendering();
+    const eng = createFxChainDsp(SR, { limiter: 'lookahead', preGain: 0.8 }); eng.setTempo(120, 0, true);
+    const st = sanitizeSlots(preset);
+    st.chain.forEach((x, i) => { eng.add(i + 1, x.type, 0); for (const [k, v] of slotProgram(x)) eng.set(i + 1, k, v, 0, true); });
+    eng.order([1, 2, 3], 0, true);
+    const eL = new Float32Array(N), eR = new Float32Array(N);
+    for (let o = 0; o < N; o += 128) eng.process(inL.subarray(o, o + 128), inR.subarray(o, o + 128), eL.subarray(o, o + 128), eR.subarray(o, o + 128), 128, o);
+    const TINY = 1.1754943508222875e-38, ftz = (v) => (Math.abs(v) < TINY ? 0 : v);
+    const sameFtz = (x, y) => x.every((v, i) => ftz(v) === ftz(y[i]));
+    check('slots: an ASTRID preset in the real worklet == the slot engine (float32 subnormals as 0)', fx.status === 'ready' && sameFtz(out.getChannelData(0), eL) && sameFtz(out.getChannelData(1), eR), rms(out.getChannelData(0), eL));
+  }
+  // Slot panel: ASTRID's Hacks panel on the kit's FX cards.
+  {
+    const ctx = new OfflineAudioContext(2, 128, SR);
+    const fx = createFx(ctx, { slots: 3, limiter: 'lookahead', state: [{ id: 'lowpass-1', type: 'lowpass', bypass: false, dials: { cutoff: 40 } }] });
+    await fx.ready;
+    const host = document.getElementById('panel');
+    const panel = await fx.mount(host);
+    const q = (sel) => host.querySelector(sel), qa = (sel) => [...host.querySelectorAll(sel)];
+    const add = q('[data-testid="nc-fx-add"]');
+    check('slots panel: "Add a hack" offers ASTRID\'s menu in ASTRID\'s order (no filters)', add.getAttribute('aria-label') === 'Add a hack'
+      && [...add.options].map((o) => o.textContent).join() === 'Add a hack,Delay,Reverb,Flanger,Chorus,Phaser,EQ,Drive,Compressor,Width', [...add.options].map((o) => o.textContent).join());
+    check('slots panel: a hidden filter from an old preset shows as a card and can be removed', qa('.nc-ui-fx').length === 1 && q('[data-testid="nc-fx-lowpass-1"] .nc-ui-fx-name').textContent === 'Low-pass filter');
+    q('[data-testid="nc-fx-remove-lowpass-1"]').click();
+    check('slots panel: remove', qa('.nc-ui-fx').length === 0 && fx.getChain().length === 0 && q('[data-testid="nc-fx-limiter"]').hidden);
+    for (const t of ['drive', 'eq', 'flanger']) { add.value = t; add.dispatchEvent(new Event('change')); }
+    const cards = qa('.nc-ui-fx');
+    check('slots panel: add three; full at three (select disabled, "3 of 3")', cards.length === 3 && add.disabled && q('[data-testid="nc-fx-cap"]').textContent === '3 of 3'
+      && fx.getChain().map((x) => x.id).join() === 'drive-1,eq-1,flanger-1');
+    const card = cards[0], name = card.querySelector('.nc-ui-fx-name'), sw = card.querySelector('.nc-ui-switch');
+    check('slots panel: kit card markup (depth by position as ASTRID, header name + switch named by it, On/Off text)',
+      card.dataset.ncDepth === '2' && cards[2].dataset.ncDepth === '4' && card.querySelector('.nc-ui-fx-hd') && sw.getAttribute('role') === 'switch'
+      && sw.getAttribute('aria-labelledby') === name.id && sw.getAttribute('aria-checked') === 'true' && sw.textContent === 'OnOff' && card.querySelector('.nc-token-probe'));
+    sw.click();
+    check('slots panel: the switch bypasses; the card dims by data-nc-dim', fx.getParam('drive-1', 'bypass') === true && sw.getAttribute('aria-checked') === 'false' && card.dataset.ncDim === 'true');
+    const more = card.querySelector('details.nc-ui-more');
+    check('slots panel: nc-fx\'s own dials sit under "More"', more && more.querySelector('summary').textContent === 'More'
+      && [...more.querySelectorAll('.nc-field')].map((f) => f.querySelector('.nc-label').textContent).join() === 'Curve,Tone,Accent → drive,Accent → tone');
+    const sl = card.querySelector('.nc-field[data-nc-slider] .nc-range');
+    check('slots panel: slider fields are the kit\'s (label, range, readout, aria-valuetext)', sl && sl.closest('.nc-field').querySelector('.nc-label') && sl.getAttribute('aria-valuetext') === 'clean');
+    check('slots panel: EQ shows ASTRID\'s note', q('[data-testid="nc-fx-eq-1"] .nc-note').textContent === 'Low shelf 150 Hz, high shelf 6 kHz.');
+    q('[data-testid="nc-fx-down-drive-1"]').click();
+    check('slots panel: move down (and the first card\'s up is disabled)', fx.getChain().map((x) => x.id).join() === 'eq-1,drive-1,flanger-1' && q('[data-testid="nc-fx-up-eq-1"]').disabled);
+    q('[data-testid="nc-fx-up-flanger-1"]').click();
+    check('slots panel: move up', fx.getChain().map((x) => x.id).join() === 'eq-1,flanger-1,drive-1');
+    check('slots panel: the limiter line (lookahead)', q('[data-testid="nc-fx-limiter"]').textContent === 'Limiter −1 dB, fixed last');
+    const rm = q('[data-testid="nc-fx-remove-eq-1"]');
+    const fb = getComputedStyle(rm).transitionDuration.split(',').map(parseFloat);
+    check('slots panel: one-off feedback motion is 100-250 ms', fb.every((t) => t >= 0.1 && t <= 0.25), fb);
+    fx.setState([{ id: 'chorus-1', type: 'chorus', bypass: false, dials: { mix: 70 } }]);
+    check('slots panel: a state loaded by the host rebuilds the cards', qa('.nc-ui-fx').length === 1 && q('[data-testid="nc-fx-chorus-1-mix"]').value === '70' && !add.disabled);
+    fx.setParam('chorus-1', 'mix', 20);
+    check('slots panel: a host-moved slider is marked data-modulated', q('[data-testid="nc-fx-chorus-1-mix"]').hasAttribute('data-modulated'));
+    panel.destroy();
+    check('slots panel: destroy', !host.querySelector('.nc-fx'));
+  }
+
+  // Module shading (nc-ui docs/design-rules.md), with the real nc-ui sheet: panel stack-1, cards stack-2, -3, -4 by
+  // position. Computed backgrounds strictly darken top to bottom, and re-shade at once after a move, add or remove.
+  {
+    const lum = (el) => { const m = getComputedStyle(el).backgroundColor.match(/\d+(\.\d+)?/g).map(Number); return m[0] + m[1] + m[2]; };
+    const host = document.getElementById('panel');
+    const ctx = new OfflineAudioContext(2, 128, SR);
+    const fx = createFx(ctx, { slots: 3, state: [{ id: 'eq-1', type: 'eq' }, { id: 'drive-1', type: 'drive' }, { id: 'phaser-1', type: 'phaser' }] });
+    await fx.ready;
+    const panel = await fx.mount(host);
+    const shades = () => [panel.root, ...host.querySelectorAll('.nc-ui-fx')].map(lum);
+    const strictlyDarker = (a) => a.every((v, i) => i === 0 || v < a[i - 1]);
+    const s0 = shades();
+    check('shading: panel stack-1, cards stack-2, -3, -4; backgrounds strictly darken top to bottom', strictlyDarker(s0) && s0.length === 4
+      && [...host.querySelectorAll('.nc-ui-fx')].map((c) => c.dataset.ncDepth).join() === '2,3,4', s0);
+    const firstBg = getComputedStyle(host.querySelector('[data-testid="nc-fx-eq-1"]')).backgroundColor;
+    host.querySelector('[data-testid="nc-fx-down-eq-1"]').click();
+    const s1 = shades(), eq = host.querySelector('[data-testid="nc-fx-eq-1"]'), top = host.querySelector('.nc-ui-fx');
+    check('shading: depth follows position: after a move the stack re-shades (still strictly darker), the moved card darker',
+      strictlyDarker(s1) && eq.dataset.ncDepth === '3' && top.dataset.testid === 'nc-fx-drive-1' && top.dataset.ncDepth === '2'
+      && getComputedStyle(top).backgroundColor === firstBg && getComputedStyle(eq).backgroundColor !== firstBg, s1);
+    host.querySelector('[data-testid="nc-fx-remove-drive-1"]').click();
+    check('shading: after a remove the new first card is stack-2', host.querySelector('.nc-ui-fx').dataset.ncDepth === '2' && strictlyDarker(shades()));
+    check('shading: the slider track and text-sub follow each card\'s step (kit rules)', getComputedStyle(host.querySelector('.nc-ui-fx')).getPropertyValue('--nc-ui-text-sub').trim() !== getComputedStyle(panel.root).getPropertyValue('--nc-ui-text-sub').trim());
+    panel.destroy();
+    const fixed = createFx(ctx);
+    await fixed.ready;
+    const p2 = await fixed.mount(host);
+    const f0 = [p2.root, ...host.querySelectorAll('.nc-ui-fx')].map(lum);
+    check('shading: the fixed chain too (Drive, Delay, Reverb = 2, 3, 4)', strictlyDarker(f0) && [...host.querySelectorAll('.nc-ui-fx')].map((c) => c.dataset.ncDepth).join() === '2,3,4', f0);
+    p2.destroy();
   }
 }
 
