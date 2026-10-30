@@ -22,6 +22,10 @@
   "More" for nc-fx's own dials), styled by the live nc-ui sheet; nc-ui is not imported. With `slots`, ASTRID's Hacks
   panel: "Add a hack", ▲ ▼ and × per card, the limiter line. The panel's own CSS is nc-ui custom properties only.
   The On / Off control is now a switch (`aria-checked`, was a button with `aria-pressed`).
+- **Module shading (Peter).** The FX stack steps darker top to bottom as ASTRID's VCO → VCF → VCA modules do left to
+  right, on nc-ui's stack ramp: the panel (the kit's inset section) is stack-1, the cards stack-2, -3, -4 by position
+  (the fixed chain too), re-shading at once on add, remove or move; the Add row and limiter line stay on stack-1.
+  The browser tests load a pinned copy of the nc-ui sheet (north-star 0f26793) and check the computed backgrounds.
 - **Engine.** Drive, delay and plate are now instantiable units (`src/units.js`) shared by both chains; no change in
   sound (every parity test bit-identical). Heap-delta gates: 0 B for every effect with its dials, bypass and tempo
   moving; adding / reordering costs at most a few boxed numbers per add on the control path, no GC. 60 s denormal

@@ -254,6 +254,38 @@ async function main() {
     panel.destroy();
     check('slots panel: destroy', !host.querySelector('.nc-fx'));
   }
+
+  // Module shading (nc-ui docs/design-rules.md), with the real nc-ui sheet: panel stack-1, cards stack-2, -3, -4 by
+  // position. Computed backgrounds strictly darken top to bottom, and re-shade at once after a move, add or remove.
+  {
+    const lum = (el) => { const m = getComputedStyle(el).backgroundColor.match(/\d+(\.\d+)?/g).map(Number); return m[0] + m[1] + m[2]; };
+    const host = document.getElementById('panel');
+    const ctx = new OfflineAudioContext(2, 128, SR);
+    const fx = createFx(ctx, { slots: 3, state: [{ id: 'eq-1', type: 'eq' }, { id: 'drive-1', type: 'drive' }, { id: 'phaser-1', type: 'phaser' }] });
+    await fx.ready;
+    const panel = await fx.mount(host);
+    const shades = () => [panel.root, ...host.querySelectorAll('.nc-ui-fx')].map(lum);
+    const strictlyDarker = (a) => a.every((v, i) => i === 0 || v < a[i - 1]);
+    const s0 = shades();
+    check('shading: panel stack-1, cards stack-2, -3, -4; backgrounds strictly darken top to bottom', strictlyDarker(s0) && s0.length === 4
+      && [...host.querySelectorAll('.nc-ui-fx')].map((c) => c.dataset.ncDepth).join() === '2,3,4', s0);
+    const firstBg = getComputedStyle(host.querySelector('[data-testid="nc-fx-eq-1"]')).backgroundColor;
+    host.querySelector('[data-testid="nc-fx-down-eq-1"]').click();
+    const s1 = shades(), eq = host.querySelector('[data-testid="nc-fx-eq-1"]'), top = host.querySelector('.nc-ui-fx');
+    check('shading: depth follows position: after a move the stack re-shades (still strictly darker), the moved card darker',
+      strictlyDarker(s1) && eq.dataset.ncDepth === '3' && top.dataset.testid === 'nc-fx-drive-1' && top.dataset.ncDepth === '2'
+      && getComputedStyle(top).backgroundColor === firstBg && getComputedStyle(eq).backgroundColor !== firstBg, s1);
+    host.querySelector('[data-testid="nc-fx-remove-drive-1"]').click();
+    check('shading: after a remove the new first card is stack-2', host.querySelector('.nc-ui-fx').dataset.ncDepth === '2' && strictlyDarker(shades()));
+    check('shading: the slider track and text-sub follow each card\'s step (kit rules)', getComputedStyle(host.querySelector('.nc-ui-fx')).getPropertyValue('--nc-ui-text-sub').trim() !== getComputedStyle(panel.root).getPropertyValue('--nc-ui-text-sub').trim());
+    panel.destroy();
+    const fixed = createFx(ctx);
+    await fixed.ready;
+    const p2 = await fixed.mount(host);
+    const f0 = [p2.root, ...host.querySelectorAll('.nc-ui-fx')].map(lum);
+    check('shading: the fixed chain too (Drive, Delay, Reverb = 2, 3, 4)', strictlyDarker(f0) && [...host.querySelectorAll('.nc-ui-fx')].map((c) => c.dataset.ncDepth).join() === '2,3,4', f0);
+    p2.destroy();
+  }
 }
 
 main().catch((e) => check('no exception', false, e && e.stack || e)).finally(() => { window.__results = results; });

@@ -433,15 +433,22 @@ The processor is registered once per context, as `nc-fx@1`, so several instances
 
 ## Panel looks and motion
 
+- **Module shading.** As ASTRID's VCO → VCF → VCA modules step darker left to right, the FX stack steps darker top
+  to bottom, on nc-ui's stack ramp (docs/design-rules.md "Module shading"): the panel is stack-1, the first card
+  stack-2, the second stack-3, the third and deeper stack-4, each with that step's text-sub, divider and slider
+  track (the kit's own rules). Depth follows the card's position, not its type, so adding, removing or moving a
+  card re-shades the stack at once; the fixed chain is the same (Drive, Delay, Reverb: 2, 3, 4). The Add row and
+  the limiter line sit on the panel's stack-1.
 - **The kit's FX cards.** Each effect is the markup of nc-ui's `renderControl({ type: 'fx' })` (north-star): a
-  `.nc-ui-fx` card with `data-nc-depth` (by position, as ASTRID shades its hack cards: stack-2 down), a header with
+  `.nc-ui-fx` card with `data-nc-depth`, a header with
   the name and a `role="switch"` On / Off named by it (`aria-checked`; the card dims by `data-nc-dim` when off), the
   kit's slider, select and note fields (solid thumbs), and "More" (`details.nc-ui-more`) for nc-fx's own dials. The
   live nc-ui stylesheet (`/nc-ui/nc-ui.css`) styles it, so it looks the same in every app; nc-fx never imports nc-ui.
-  Mount it inside a kit module (the cards bleed to the module's padding, as ASTRID's).
+  Mount it inside a kit module: the panel is the kit's inset section (`.nc-section[data-nc-inset]`), so it bleeds to
+  the module's edges and its cards to the panel's, as ASTRID's Hacks panel in VCA.
 - **ASTRID's Hacks panel** with `slots`: "Add a hack" (ASTRID's menu and order; the hidden filters are not offered,
   but an old preset's filter shows and can be removed; "3 of 3" and disabled when full), ▲ ▼ and × on each card,
-  and "Limiter −1 dB, fixed last" under the cards. Option `depth` (1–4) sets the first card's shade (default 2).
+  and "Limiter −1 dB, fixed last" under the cards.
 - **Colour and length.** `src/ui-style.js` only lays out what the kit has no class for (the Add row, the move and
   remove buttons, select rows as label + value over the select, the limiter line), with nc-ui custom properties
   only: no colours, no px (the tests lint it). Screenshots: 1440 and 390 px against the live sheet in the PR.

@@ -1,12 +1,17 @@
 // The panel's own CSS. The cards, fields, sliders, selects, switches, "More" and notes are the nc-ui kit's markup and
 // are styled by the live nc-ui stylesheet (/nc-ui/nc-ui.css); this only lays out what the kit has no class for: the
 // Add row, the move and remove buttons on a card, the limiter line, and the delay's Free time marks.
+// The panel itself is stack-1 of nc-ui's module shading (docs/design-rules.md), with the same four declarations as the
+// kit's stack-1 rule (specific enough to win over the kit's adjacent shade for an inset section); it is the kit's
+// inset section, so it bleeds to its module's edges and pads itself; its cards (kit .nc-ui-fx[data-nc-depth]) are
+// stack-2, -3, -4 by position, and bleed to its edges.
 // Lengths and colours come only from nc-ui custom properties (no raw colours, no px); the only fallbacks are
 // currentColor / inherit. Motion: one-off feedback only, through nc-ui's motion roles (100-250 ms); none on a
 // modulated slider; none under reduced motion.
 // nc-fx was created by Peter Semmelhack (https://psem.me/). MIT License.
 export var FX_UI_CSS = `
 .nc-fx{display:flex;flex-direction:column;gap:var(--nc-ui-module-gap);min-width:0;font-family:var(--nc-ui-font-ui,inherit);color:var(--nc-ui-text,inherit)}
+.nc-section.nc-fx[data-nc-inset="true"][data-nc-fx][data-testid]{background:var(--nc-ui-module-bg-stack-1,transparent);--nc-ui-text-sub:var(--nc-ui-module-sub-stack-1);--nc-ui-divider:var(--nc-ui-module-div-stack-1);--nc-ui-slider-track:var(--nc-ui-module-div-stack-1)}
 .nc-fx-stack{display:flex;flex-direction:column;min-width:0}
 .nc-fx-add{display:flex;align-items:baseline;gap:var(--nc-ui-module-gap);min-width:0}
 .nc-fx-add .nc-readout{color:var(--nc-ui-text-sub,inherit);font-size:var(--nc-ui-label-size)}

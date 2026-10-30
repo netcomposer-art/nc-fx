@@ -1,5 +1,6 @@
 /* @netcomposer/nc-fx 0.1.0 panel CSS. GENERATED from src/ui-style.js. */
 .nc-fx{display:flex;flex-direction:column;gap:var(--nc-ui-module-gap);min-width:0;font-family:var(--nc-ui-font-ui,inherit);color:var(--nc-ui-text,inherit)}
+.nc-section.nc-fx[data-nc-inset="true"][data-nc-fx][data-testid]{background:var(--nc-ui-module-bg-stack-1,transparent);--nc-ui-text-sub:var(--nc-ui-module-sub-stack-1);--nc-ui-divider:var(--nc-ui-module-div-stack-1);--nc-ui-slider-track:var(--nc-ui-module-div-stack-1)}
 .nc-fx-stack{display:flex;flex-direction:column;min-width:0}
 .nc-fx-add{display:flex;align-items:baseline;gap:var(--nc-ui-module-gap);min-width:0}
 .nc-fx-add .nc-readout{color:var(--nc-ui-text-sub,inherit);font-size:var(--nc-ui-label-size)}

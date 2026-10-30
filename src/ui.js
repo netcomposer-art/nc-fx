@@ -64,7 +64,7 @@ function kitSwitch(doc, labelledBy) {
 /**
  * Render the panel into `el`.
  * @param {HTMLElement} el
- * @param {{fx: object, injectCss?: boolean, effects?: string[], depth?: number}} opts
+ * @param {{fx: object, injectCss?: boolean, effects?: string[]}} opts
  * @returns {{update(): void, destroy(): void, root: HTMLElement}}
  */
 export function mountFxPanel(el, opts) {
@@ -73,10 +73,13 @@ export function mountFxPanel(el, opts) {
   if (opts.injectCss !== false) injectStyle(doc);
   var slots = typeof fx.slots === 'number';
   var only = opts.effects || null;
-  var depth0 = opts.depth >= 1 && opts.depth <= 4 ? Math.floor(opts.depth) : 2; // ASTRID: cards from stack-2 down
   var n = ++uid;
   var root = doc.createElement('div');
-  root.className = 'nc-fx';
+  // The kit's inset section (ASTRID's Hacks panel inside its module): it bleeds to the module's edges and pads itself
+  // at every breakpoint; ui-style.js gives it stack-1 of the module shading.
+  root.className = 'nc-fx nc-section';
+  root.setAttribute('data-nc-inset', 'true');
+  root.setAttribute('data-nc-fx', '');
   root.setAttribute('data-testid', 'nc-fx-panel');
   if (slots) root.setAttribute('data-nc-fx-slots', '');
   var addSel = null, cap = null, stack = doc.createElement('div'), limiter = null;
@@ -196,7 +199,10 @@ export function mountFxPanel(el, opts) {
     var cid = 'nc-fx-' + n + '-' + item.id;
     card.className = 'nc-ui-fx';
     card.setAttribute('data-nc-id', cid);
-    card.setAttribute('data-nc-depth', String(Math.min(4, depth0 + at)));
+    // Module shading (nc-ui docs/design-rules.md): the panel is stack-1, its cards stack-2, -3, then -4 for the third
+    // and deeper, by position (not type), as ASTRID's VCO -> VCF -> VCA gradation but top to bottom. The kit's
+    // .nc-ui-fx[data-nc-depth] rules set the background, text-sub, divider and slider track for each depth.
+    card.setAttribute('data-nc-depth', String(Math.min(4, 2 + at)));
     card.setAttribute('data-testid', 'nc-fx-' + item.id);
     card.setAttribute('data-nc-fx-type', item.type);
     var c = { ref: item.id, type: item.type, card: card, sw: null, fields: [] };
