@@ -1,73 +1,35 @@
-// nc-fx parameters: the dials, their laws (dial -> DSP units) and the JSON state.
+// nc-fx parameters for the fixed chain (drive -> delay -> plate): its dials, their laws (dial -> DSP units) and its
+// JSON state (v1). The slot chain's state (v2) is src/slots.js.
 // nc-fx was created by Peter Semmelhack (https://psem.me/). MIT License.
 //
-// Dials, ranges, defaults, formats and laws are ASTRID's (NetComposer-Synth 024f200,
-// lib/synth-audio/src/hacks.ts: HACK_DEFINITIONS, dialValue, sanitizeHacks, hackParams), which copied
-// them from the site's create/hacks/stack.js. One rename: the delay's `wet` dial is `mix` here, like the
-// other two effects; ASTRID's saved chains are migrated (see migrate()).
+// Dials, ranges, defaults, formats and laws come from the catalog (src/catalog.js), which is ASTRID's
+// (lib/synth-audio/src/hacks.ts: HACK_DEFINITIONS, dialValue, sanitizeHacks, hackParams). One rename: the delay's
+// `wet` dial is `mix` here, like the other two effects; ASTRID's saved chains are migrated (see migrate()).
 
+import { catalogEntry, formatDial, dialDsp, delaySeconds, MAX_DELAY_S, ASTRID_NOTES } from './catalog.js';
 
+export { delaySeconds, MAX_DELAY_S };
 export var STATE_VERSION = 1;
-export var MAX_DELAY_S = 4.9;
 /** Fixed order. 'plate' is the effect the UI calls Reverb; 'reverb' is accepted as an alias. */
 export var EFFECT_ORDER = ['drive', 'delay', 'plate'];
 
-var NOTES = [[0.125, '1/32'], [0.25, '1/16'], [0.5, '1/8'], [0.75, '1/8 dotted'], [1, '1/4'], [1.5, '1/4 dotted'], [2, '1/2']];
-var fmtDb = function (v) { return (v > 0 ? '+' : v < 0 ? '\u2212' : '') + Math.abs(v) + ' dB'; };
-var pct = function (v) { return v + '%'; };
-var wet = function (v) { return v + '% wet'; };
-var signedPct = function (v) { return (v > 0 ? '+' : v < 0 ? '\u2212' : '') + Math.abs(v) + '%'; };
-function dial(key, label, min, max, value, format) { return { key: key, label: label, min: min, max: max, step: 1, default: value, format: format }; }
-
-/** The delay time in seconds for a note length at a tempo (ASTRID's delayS). */
-export function delaySeconds(beats, bpm) { return Math.min(MAX_DELAY_S, beats * 60 / (bpm > 0 ? bpm : 120)); }
-
+/** A catalog dial as an FxDialDef: the same plain fields, plus format(value, bpm) for the readout. */
+function withFormat(cd) {
+  var o = {};
+  for (var x in cd) if (x !== 'format') o[x] = cd[x];
+  o.format = function (v, bpm) { return formatDial(cd, v, bpm); };
+  return o;
+}
 /**
- * Effect definitions. `format(value, bpm)` gives the readout. Everything but `format` is plain data.
+ * The fixed chain's effects (drive, delay, plate), from the catalog (src/catalog.js), with `format(value, bpm)` for
+ * each dial's readout. Everything but `format` is plain data.
  * @type {ReadonlyArray<import('./index').FxEffectDef>}
  */
-export var EFFECTS = [
-  { type: 'drive', label: 'Drive', dials: [
-    // drive_db: whole dB in Smooth (ASTRID); 0.1 dB in Acid, so Bass's amounts round-trip (stepWhen).
-    Object.assign(dial('drive_db', 'Drive', 0, 24, 0, function (v) { return v === 0 ? 'clean' : fmtDb(v); }),
-      { stepWhen: [{ key: 'curve', value: 1, step: 0.1 }] }),
-    dial('output_db', 'Output', -12, 12, 0, fmtDb),
-    dial('mix', 'Mix', 0, 100, 100, wet),
-    // Added after 0.1.0's first cut (indexes 14-17); the defaults are ASTRID's sound, so old states are unchanged.
-    { key: 'curve', label: 'Curve', min: 0, max: 1, step: null, default: 0,
-      options: [{ value: 0, label: 'Smooth' }, { value: 1, label: 'Acid' }],
-      format: function (v) { return v === 1 ? 'Acid' : 'Smooth'; } },
-    dial('tone', 'Tone', 0, 100, 100, function (v) { return v >= 100 ? 'off' : Math.round(500 * Math.pow(2, 5 * v / 99)) + ' Hz'; }),
-    dial('mod_drive', 'Accent \u2192 drive', -100, 100, 0, signedPct),
-    dial('mod_tone', 'Accent \u2192 tone', -100, 100, 0, signedPct)] },
-  { type: 'delay', label: 'Delay', tempoSynced: true, dials: [
-    // overriddenBy: the UI shows the select as overridden while Free time is on.
-    { key: 'delay_beats', label: 'Timing', min: 0.125, max: 2, step: null, default: 0.75, overriddenBy: 'beats_free',
-      options: NOTES.map(function (n) { return { value: n[0], label: n[1] }; }),
-      format: function (v, bpm) { return Math.round(delaySeconds(v, bpm) * 1000) + ' ms'; } },
-    dial('feedback', 'Feedback', 0, 90, 35, pct),
-    dial('mix', 'Wet/dry', 0, 100, 0, wet),
-    // Added for Bass (indexes 18-23); the defaults are ASTRID's sound, so old states are unchanged.
-    // tone: 0-99 -> a one-pole low-pass at 800 Hz * 2^(4t), t = v / 99 (Bass's law); 100 = off.
-    dial('tone', 'Tone', 0, 100, 100, function (v) { return v >= 100 ? 'off' : Math.round(800 * Math.pow(2, 4 * v / 99)) + ' Hz'; }),
-    Object.assign(dial('low_cut', 'Low cut', 0, 1000, 0, function (v) { return v === 0 ? 'off' : v + ' Hz'; }), { curve: 'log' }),
-    { key: 'mode', label: 'Mode', min: 0, max: 1, step: null, default: 0,
-      options: [{ value: 0, label: 'Insert' }, { value: 1, label: 'Send' }],
-      format: function (v) { return v === 1 ? 'Send' : 'Insert'; } },
-    dial('send', 'Send', 0, 100, 100, pct),
-    dial('mod_send', 'Accent \u2192 send', -100, 100, 0, signedPct),
-    // beats_free: 0 = off (the Timing select plays); otherwise any 0.125-2 beats, kept exactly (Bass's division).
-    Object.assign(dial('beats_free', 'Free time', 0, 2, 0, function (v, bpm) {
-      return v === 0 ? 'off' : 'free ' + +v.toFixed(3) + ' beats \u00b7 ' + Math.round(delaySeconds(v, bpm) * 1000) + ' ms';
-    }), { step: 0.001, exact: true, minOn: 0.125 })] },
-  { type: 'plate', label: 'Reverb', dials: [
-    dial('predelay', 'Pre-delay', 0, 200, 0, function (v) { return v + ' ms'; }),
-    dial('size', 'Size', 0, 100, 50, function (v) { return (0.5 + v / 100).toFixed(2) + '\u00d7'; }),
-    dial('decay', 'Decay', 0, 100, 50, pct),
-    dial('damping', 'Damping', 0, 100, 0, pct),
-    dial('mix', 'Mix', 0, 100, 0, wet)] }
-];
-
+export var EFFECTS = EFFECT_ORDER.map(function (type) {
+  var e = catalogEntry(type), o = { type: type, label: e.label, dials: e.dials.map(withFormat) };
+  if (e.tempoSynced) o.tempoSynced = true;
+  return o;
+});
 var ALIAS = { reverb: 'plate' };
 /** 'reverb' -> 'plate'; anything unknown -> null. */
 export function effectType(t) {
@@ -117,6 +79,11 @@ export function defaultState() {
     e.dials.forEach(function (d) { dials[d.key] = d.default; });
     return { id: e.type, type: e.type, bypass: true, dials: dials };
   }) };
+}
+
+/** ASTRID's dialValue for its delay Timing: the nearest of ASTRID's notes (src/slots.js uses it too). */
+export function astridBeats(raw) {
+  return ASTRID_NOTES.reduce(function (best, v) { return Math.abs(v - raw) < Math.abs(best - raw) ? v : best; }, ASTRID_NOTES[0]);
 }
 
 function isRecord(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
@@ -178,14 +145,16 @@ export var PARAM_INDEX = {
 /** One dial (UI units, already clamped) to its engine value (hacks.ts hackParams). bypass -> the on flag. */
 export function dialToDsp(type, key, v) {
   if (key === 'bypass') return v ? 0 : 1;
-  switch (type) {
-    // tone: 0-99 -> t = v / 99 (Bass's 0-1 law, 500 Hz * 2^(5t)); 100 -> 100/99 > 1, which the engine reads as off.
-    case 'drive': return key === 'mix' || key === 'mod_drive' || key === 'mod_tone' ? v / 100 : key === 'tone' ? v / 99 : v;
-    // delay: tone 0-99 -> v / 99 (100 -> 100/99 > 1 = off); low_cut in Hz; mode 0/1; beats_free in beats (0 = off).
-    case 'delay': return key === 'delay_beats' || key === 'low_cut' || key === 'mode' || key === 'beats_free' ? v : key === 'tone' ? v / 99 : v / 100;
-    case 'plate': return key === 'predelay' ? v / 1000 : v / 100;
-  }
-  return 0;
+  // From the catalog's laws: tone 0-99 -> t = v / 99 (100 -> 100/99 > 1, which the engine reads as off); low_cut in
+  // Hz; mode 0/1; beats in beats (beats_free 0 = off); predelay ms -> s; the rest / 100. Any catalog type works.
+  var d = dialDef(type, key) || catalogDialOf(type, key);
+  return d ? dialDsp(d, v) : 0;
+}
+function catalogDialOf(type, key) {
+  var e = catalogEntry(type);
+  if (!e) return null;
+  for (var i = 0; i < e.dials.length; i++) if (e.dials[i].key === key) return e.dials[i];
+  return null;
 }
 
 var UNITS = { drive_db: 'dB', output_db: 'dB', delay_beats: 'beats', predelay: 'ms', curve: null, low_cut: 'Hz', mode: null, beats_free: 'beats' }; // others: '%'

@@ -102,7 +102,7 @@ var PLATE_IG = [0.75, 0.75, 0.625, 0.625];
 var UNIT = { drive: 0, delay: 1, plate: 2, eq: 3, compressor: 4, width: 5, flanger: 6, chorus: 7, phaser: 8, lowpass: 9, highpass: 10, bandpass: 11 };
 var UNIT_TYPES = ['drive', 'delay', 'plate', 'eq', 'compressor', 'width', 'flanger', 'chorus', 'phaser', 'lowpass', 'highpass', 'bandpass'];
 /** Params per unit (k = 0 is the on flag). */
-var UNIT_NPARAMS = [8, 10, 6, 8, 6, 3, 5, 5, 6, 2, 3, 4];
+var UNIT_NPARAMS = [8, 10, 6, 6, 6, 3, 5, 5, 6, 2, 3, 4];
 
 /** ctl() ops. Results are small integers (1 = true), never doubles. */
 var OP_NONE = 0, OP_CLEAR = 1, OP_FADE_BEGIN = 2, OP_FADE_WORK = 3, OP_FADE_DONE = 4, OP_FADE_IDLE = 5,
