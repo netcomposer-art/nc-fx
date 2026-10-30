@@ -13,7 +13,7 @@
 // Events (sample-accurate, the same queue as createFxDsp): add (the box goes live: ncChainAdd), order (ncChainOrder;
 // snap = immediate, as ncChainSet's), a param (ncChainPatch), tempo, clear (ncChainClear).
 
-import { createFxEnv, createUnit, UNIT_TYPES, CLEAR_CHUNK, PI, OP_CLEAR, OP_FADE_BEGIN, OP_FADE_WORK, OP_FADE_DONE, OP_FADE_IDLE, OP_SLEEP, OP_BLOCK, OP_MOD_ON, OP_GRID_ON, OP_GRID, OP_SETTLE } from './units.js'; // @strip
+import { createFxEnv, createUnit, UNIT_TYPES, CLEAR_CHUNK, PI, OP_CLEAR, OP_FADE_BEGIN, OP_FADE_WORK, OP_FADE_DONE, OP_FADE_IDLE, OP_SLEEP, OP_BLOCK, OP_MOD_ON, OP_GRID_ON, OP_GRID, OP_SETTLE, OP_RESET } from './units.js'; // @strip
 import { createLimiter, createQueue, fadeStep, EV_TEMPO, EV_CLEAR, HORIZON_S, MOD_GRID, QUEUE_SIZE, QUEUE_EMPTY } from './dsp.js'; // @strip
 
 var EV_ADD = -1000;   // EV_ADD - b: box b goes live
@@ -256,7 +256,7 @@ export function createFxChainDsp(sampleRate, opts) {
       if (b < 0) return false;
       if (POOL[b][t] === null) POOL[b][t] = createUnit(E, t);
       var u = POOL[b][t];
-      u.reset();
+      u.ctl(OP_RESET, 0);
       u.retarget(true);
       for (var k = 0; k < MAXK; k++) PRM[b * MAXK + k] = 0;
       TYPE[b] = t; UID[b] = uid; CUR[b] = u; STATE[b] = 1; AGE[b] = ++clock;

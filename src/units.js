@@ -54,7 +54,7 @@ export var UNIT_NPARAMS = [8, 10, 6, 6, 6, 3, 5, 5, 6, 2, 3, 4];
 
 /** ctl() ops. Results are small integers (1 = true), never doubles. */
 export var OP_NONE = 0, OP_CLEAR = 1, OP_FADE_BEGIN = 2, OP_FADE_WORK = 3, OP_FADE_DONE = 4, OP_FADE_IDLE = 5,
-  OP_SLEEP = 6, OP_BLOCK = 7, OP_MOD_ON = 8, OP_GRID_ON = 9, OP_GRID = 10, OP_SETTLE = 11;
+  OP_SLEEP = 6, OP_BLOCK = 7, OP_MOD_ON = 8, OP_GRID_ON = 9, OP_GRID = 10, OP_SETTLE = 11, OP_RESET = 12;
 
 export function fxCoef(seconds, sr) { return 1 - Math.exp(-1 / (seconds * sr)); }
 
@@ -104,6 +104,7 @@ export function unitDrive(E) {
   DR[8] = 1; DR[9] = 1; DR[13] = 100 / 99; DR[22] = 1; DR[20] = -1;
   var modBuf = null; // this block's CV while a depth is set (E.mod: the CV, or silence when there is none)
   toneCoef(); // the coefficient for tone 1.0, so a tone switched on between grid frames starts from a real filter
+  DR0 = DR.slice();
   function clear() { ctl(1, 0); }
   // Drive tone: Bass's one-pole LP law, 500 Hz * 2^(5t), t = toneS (+ the tone mod), in Bass's order of operations.
   function toneCoef() {
@@ -127,8 +128,10 @@ export function unitDrive(E) {
     return false;
   }
   /** Block start: the depths in use and the CV (E.mod) for this block. */
+  var DR0; // the starting state, for OP_RESET (taken above, once DR was set up)
   function ctl(op, j) {
     switch (op) {
+      case 12: DR.set(DR0); return 1;
       case 1: DR[0] = 0; DR[1] = 0; DR[2] = 0; DR[3] = 0; DR[14] = 0; DR[15] = 0; return 1; // clear
       case 7: DR[17] = DR[24]; DR[18] = DR[25]; modBuf = E.mod; return 1; // block start: depths and CV in use
       case 8: return DR[24] !== 0 || DR[25] !== 0 ? 1 : 0; // mod on
@@ -237,10 +240,13 @@ export function unitDrive(E) {
     IO[1] = dryG * xR + wetG * oR;
   }
   return { type: 0, step: step, set: set, ctl: ctl, retarget: noRetarget,
-    reset: function () { DR.fill(0); DR[8] = 1; DR[9] = 1; DR[13] = 100 / 99; DR[22] = 1; DR[20] = -1; toneCoef(); } };
+    reset: function () { ctl(12, 0); } };
 }
 function noop() { }
 function noRetarget(snap) { return snap; }
+// OP_RESET (a fresh unit for the slot engine's add): every unit copies its state arrays back to a snapshot taken
+// when it was made (typed-array copies: no double is materialised) and clears its buffers, inside ctl(), which
+// the per-block work keeps optimised.
 
 // ---------------------------------------------------------------------------------------------------------------
 // Delay (ncDelay*: one stereo tap, linear interpolation, equal-power wet/dry) plus Bass's tone, low cut, Send mode,
@@ -304,9 +310,11 @@ export function unitDelay(E) {
     }
     return false;
   }
+  var DL0 = DL.slice(); // the starting state, for OP_RESET
   function ctl(op, a) {
     var p, end;
     switch (op) {
+      case 12: DL.set(DL0); dBufL.fill(0); dBufR.fill(0); return 1;
       case 1: dBufL.fill(0); dBufR.fill(0); DL[0] = 0; DL[10] = 0; DL[24] = 0; DL[25] = 0; DL[26] = 0; DL[27] = 0; return 1; // clear
       case 2: DL[29] = 0; return 1; // fade-clear begins
       case 3: // fade-clear: zero up to `a` samples of the line, return what is left of the budget
@@ -429,7 +437,7 @@ export function unitDelay(E) {
       DT[c] = lp - hp;
     }
   }
-  return { type: 1, step: step, set: set, ctl: ctl, retarget: retarget, reset: function () { clear(); init(); } };
+  return { type: 1, step: step, set: set, ctl: ctl, retarget: retarget, reset: function () { ctl(12, 0); } };
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -526,9 +534,11 @@ export function unitPlate(E) {
     PL[2 * k - 1] = x; if (snap) PL[2 * k - 2] = x;
     return true;
   }
+  var PL0 = PL.slice(); // the starting state, for OP_RESET
   function ctl(op, a) {
     var li, pos, n, end, left;
     switch (op) {
+      case 12: PL.set(PL0); for (li = 0; li < N_LINES; li++) PB[li].fill(0); clearState(); return 1;
       case 1: for (li = 0; li < N_LINES; li++) PB[li].fill(0); clearState(); return 1; // clear
       case 2: PL[21] = 0; PL[22] = 0; return 1; // fade-clear begins
       case 3: // fade-clear: zero up to `a` samples, line by line; return what is left of the budget
@@ -649,7 +659,7 @@ export function unitPlate(E) {
     IO[0] = dryG * xL + wetG * oL;
     IO[1] = dryG * xR + wetG * oR;
   }
-  return { type: 2, step: step, set: set, ctl: ctl, retarget: noRetarget, reset: function () { clear(); init(); } };
+  return { type: 2, step: step, set: set, ctl: ctl, retarget: noRetarget, reset: function () { ctl(12, 0); } };
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -659,14 +669,9 @@ export function unitPlate(E) {
 // (lowpass open, modulation rate/depth/feedback, every on/off) snap onto their target within SNAP_EPS once per
 // block, so silence can't decay into subnormals; settle() in each unit lists them.
 
-/** The on/off part shared by the units below: A[0] on smoother, A[1] target, A[2] slept in 'hold'. */
-function onFlag(E, A, snap, clear) {
-  var x = E.V[0] ? 1 : 0;
-  E.V[0] = x;
-  if (x && A[2] === 1) { clear(); A[2] = 0; }
-  A[1] = x;
-  if (snap) A[0] = x;
-}
+// The on flag (k 0) of the units below, written in each set(): A[0] on smoother, A[1] target, A[2] slept in 'hold'
+// (switching on after a 'hold' sleep starts from cleared state). Written in place, not as a shared helper: a helper
+// that only runs on events runs unoptimised, and unoptimised code allocates.
 
 // RBJ biquads (Bristow-Johnson, "Audio EQ Cookbook"): F holds b0 b1 b2 a1 a2 z1L z2L z1R z2R at offset o.
 // ncBiquadSet kind 0 low shelf, 1 peak, 2 high shelf; P holds 0 hz, 1 dB, 2 q, 3 sample rate (no double crosses a call).
@@ -755,13 +760,15 @@ function begin(E, A, D) {
   return true;
 }
 /** A unit with no tail to fade-clear and no grid or mod work: ctl() runs clear() and settle(); fade work passes on. */
-function unitBase(type, step, set, clear, reset, settleAll) {
+function unitBase(type, step, set, clear, arrays, settleAll) {
+  var saved = arrays.map(function (x) { return x.slice(); });
   function ctl(op, a) {
     if (op === 11) { settleAll(); return 1; }
+    if (op === 12) { for (var i = 0; i < arrays.length; i++) arrays[i].set(saved[i]); clear(); return 1; }
     if (op === 1) { clear(); return 1; }
     return op === 3 ? a : op === 5 ? 1 : 0;
   }
-  return { type: type, step: step, set: set, ctl: ctl, retarget: noRetarget, reset: reset };
+  return { type: type, step: step, set: set, ctl: ctl, retarget: noRetarget, reset: function () { ctl(12, 0); } };
 }
 
 // EQ (ncEq*): a low shelf at 150 Hz, a bell, a high shelf at 6 kHz (ASTRID's widgets: low_hz 150, high_hz 6000,
@@ -781,7 +788,8 @@ export function unitEq(E) {
   init();
   function clear() { biquadClear(F, 0); biquadClear(F, 9); biquadClear(F, 18); }
   function set(k, snap) {
-    if (k === 0) { onFlag(E, A, snap, clear); return true; }
+    var x0;
+    if (k === 0) { x0 = E.V[0] ? 1 : 0; E.V[0] = x0; if (x0 && A[2] === 1) { clear(); A[2] = 0; } A[1] = x0; if (snap) A[0] = x0; return true; }
     var x;
     if (k === 1 || k === 2 || k === 4) {
       if (!(E.V[1] = -18, E.V[2] = 18, take(E))) return false; // A[14]: ASTRID's widgets always carry low_hz/high_hz/mid_q, so +-18 dB
@@ -832,7 +840,7 @@ export function unitEq(E) {
     biquadStep(F, 18, IO);
     finish(IO, D, A);
   }
-  return unitBase(3, step, set, clear, init, settleAll);
+  return unitBase(3, step, set, clear, [A, F], settleAll);
 }
 
 // Compressor (ncComp*): feed-forward, stereo-linked peak detector, soft knee 6 dB, smooth branching in dB
@@ -846,7 +854,8 @@ export function unitCompressor(E) {
   init();
   function clear() { A[3] = 0; A[4] = 0; }
   function set(k, snap) {
-    if (k === 0) { onFlag(E, A, snap, clear); return true; }
+    var x0;
+    if (k === 0) { x0 = E.V[0] ? 1 : 0; E.V[0] = x0; if (x0 && A[2] === 1) { clear(); A[2] = 0; } A[1] = x0; if (snap) A[0] = x0; return true; }
     switch (k) {
       case 1: if (!(E.V[1] = -60, E.V[2] = 0, take(E))) return false; A[6] = E.V[0]; if (snap) A[5] = A[6]; return true;
       case 2: if (!(E.V[1] = 1, E.V[2] = 20, take(E))) return false; A[8] = E.V[0]; if (snap) A[7] = A[8]; return true;
@@ -886,7 +895,7 @@ export function unitCompressor(E) {
     IO[0] = xL * g; IO[1] = xR * g;
     finish(IO, D, A);
   }
-  return unitBase(4, step, set, clear, init, settleAll);
+  return unitBase(4, step, set, clear, [A], settleAll);
 }
 
 // Width (ncWidth*): mid/side. M = (L+R)/2, S = (L-R)/2, S times width. A mono source has no side, so width cannot
@@ -897,7 +906,8 @@ export function unitWidth(E) {
   function init() { A.fill(0); A[3] = 1; A[4] = 1; }
   init();
   function set(k, snap) {
-    if (k === 0) { onFlag(E, A, snap, noop); return true; }
+    var x0;
+    if (k === 0) { x0 = E.V[0] ? 1 : 0; E.V[0] = x0; A[2] = 0; A[1] = x0; if (snap) A[0] = x0; return true; }
     if (k === 1) { if (!(E.V[1] = 0, E.V[2] = 2, take(E))) return false; A[4] = E.V[0]; if (snap) A[3] = A[4]; return true; }
     if (k === 2) { if (!(E.V[1] = -1, E.V[2] = 1, take(E))) return false; A[6] = E.V[0]; if (snap) A[5] = A[6]; return true; }
     return false;
@@ -922,7 +932,7 @@ export function unitWidth(E) {
     IO[0] = yL; IO[1] = yR;
     finish(IO, D, A);
   }
-  return unitBase(5, step, set, noop, init, settleAll);
+  return unitBase(5, step, set, noop, [A], settleAll);
 }
 
 // Modulation (hacks-astrid/mod.js, ASTRID's own): A holds 0 on, 1 onT, 2 slept, 3 rateS, 4 rateT, 5 depthS, 6 depthT,
@@ -933,15 +943,8 @@ function modInit(A, rate, depth, fb, mix) {
   A.fill(0);
   A[3] = rate; A[4] = rate; A[5] = depth; A[6] = depth; A[7] = fb; A[8] = fb; A[9] = mix; A[10] = mix;
 }
-/** asModApply for one param (k: 1 rate, 2 depth, 3 feedback, 4 mix); flanger's feedback goes negative (neg). */
-function modSet(E, A, k, snap, neg) {
-  // rate 0.01-20 Hz, depth 0-1, feedback 0 (flanger -0.9) to 0.9, mix 0-1. Literal bounds only (see take).
-  var ok = k === 1 ? (E.V[1] = 0.01, E.V[2] = 20, take(E)) : k === 3 ? (neg ? (E.V[1] = -0.9, E.V[2] = 0.9, take(E)) : (E.V[1] = 0, E.V[2] = 0.9, take(E))) : (E.V[1] = 0, E.V[2] = 1, take(E));
-  if (!ok) return false;
-  var s = k === 1 ? 3 : k === 2 ? 5 : k === 3 ? 7 : 9;
-  A[s + 1] = E.V[0]; if (snap) A[s] = A[s + 1];
-  return true;
-}
+// asModApply, per param, is written in each modulation unit's set(): rate 0.01-20 Hz (A 3/4), depth 0-1 (5/6),
+// feedback 0 (flanger -0.9) to 0.9 (7/8), mix 0-1 (9/10). In place, not a shared helper (see the on flag above).
 /** asSmooth: rate, depth, feedback and mix; only mix snaps (within 1e-6). */
 function modSmooth(A, E) {
   var k = E.kFast;
@@ -980,8 +983,15 @@ export function unitFlanger(E) {
   function clear() { bufL.fill(0); bufR.fill(0); A[11] = 0; }
   init();
   function set(k, snap) {
-    if (k === 0) { onFlag(E, A, snap, clear); return true; }
-    return k >= 1 && k <= 4 ? modSet(E, A, k, snap, true) : false;
+    var x0;
+    if (k === 0) { x0 = E.V[0] ? 1 : 0; E.V[0] = x0; if (x0 && A[2] === 1) { clear(); A[2] = 0; } A[1] = x0; if (snap) A[0] = x0; return true; }
+    switch (k) {
+      case 1: if (!(E.V[1] = 0.01, E.V[2] = 20, take(E))) return false; A[4] = E.V[0]; if (snap) A[3] = A[4]; return true;
+      case 2: if (!(E.V[1] = 0, E.V[2] = 1, take(E))) return false; A[6] = E.V[0]; if (snap) A[5] = A[6]; return true;
+      case 3: if (!(E.V[1] = -0.9, E.V[2] = 0.9, take(E))) return false; A[8] = E.V[0]; if (snap) A[7] = A[8]; return true;
+      case 4: if (!(E.V[1] = 0, E.V[2] = 1, take(E))) return false; A[10] = E.V[0]; if (snap) A[9] = A[10]; return true;
+    }
+    return false;
   }
   function step() {
     if (!begin(E, A, D)) return;
@@ -1003,7 +1013,7 @@ export function unitFlanger(E) {
     IO[1] = dg * xR + wg * wR;
     finish(IO, D, A);
   }
-  return unitBase(6, step, set, clear, init, function () { modSettle(A); });
+  return unitBase(6, step, set, clear, [A], function () { modSettle(A); });
 }
 
 // Chorus: three voices swept 10-18 ms, a third of a cycle apart, spread left/centre/right by Spread. Each side's
@@ -1016,9 +1026,15 @@ export function unitChorus(E) {
   function clear() { bufL.fill(0); bufR.fill(0); A[11] = 0; }
   init();
   function set(k, snap) {
-    if (k === 0) { onFlag(E, A, snap, clear); return true; }
-    if (k === 3) { if (!(E.V[1] = 0, E.V[2] = 1, take(E))) return false; A[14] = E.V[0]; if (snap) A[13] = A[14]; return true; }
-    return k === 1 || k === 2 ? modSet(E, A, k, snap, false) : k === 4 ? modSet(E, A, 4, snap, false) : false;
+    var x0;
+    if (k === 0) { x0 = E.V[0] ? 1 : 0; E.V[0] = x0; if (x0 && A[2] === 1) { clear(); A[2] = 0; } A[1] = x0; if (snap) A[0] = x0; return true; }
+    switch (k) {
+      case 1: if (!(E.V[1] = 0.01, E.V[2] = 20, take(E))) return false; A[4] = E.V[0]; if (snap) A[3] = A[4]; return true;
+      case 2: if (!(E.V[1] = 0, E.V[2] = 1, take(E))) return false; A[6] = E.V[0]; if (snap) A[5] = A[6]; return true;
+      case 3: if (!(E.V[1] = 0, E.V[2] = 1, take(E))) return false; A[14] = E.V[0]; if (snap) A[13] = A[14]; return true;
+      case 4: if (!(E.V[1] = 0, E.V[2] = 1, take(E))) return false; A[10] = E.V[0]; if (snap) A[9] = A[10]; return true;
+    }
+    return false;
   }
   function step() {
     if (!begin(E, A, D)) return;
@@ -1047,7 +1063,7 @@ export function unitChorus(E) {
     IO[1] = dg * xR + wg * (gr > 0 ? sumR / Math.sqrt(gr) : 0);
     finish(IO, D, A);
   }
-  return unitBase(7, step, set, clear, init, function () { modSettle(A); });
+  return unitBase(7, step, set, clear, [A], function () { modSettle(A); });
 }
 
 // Phaser: 4, 6 or 8 first-order all-passes swept 150 Hz up to five octaves, with feedback around the set. Right side
@@ -1060,9 +1076,16 @@ export function unitPhaser(E) {
   function clear() { zL.fill(0); zR.fill(0); A[16] = 0; A[17] = 0; }
   init();
   function set(k, snap) {
-    if (k === 0) { onFlag(E, A, snap, clear); return true; }
-    if (k === 3) { var s = E.V[0]; A[15] = s === 4 || s === 8 ? s : 6; E.V[0] = A[15]; return true; }
-    return k === 1 || k === 2 ? modSet(E, A, k, snap, false) : k === 4 ? modSet(E, A, 3, snap, false) : k === 5 ? modSet(E, A, 4, snap, false) : false;
+    var x0;
+    if (k === 0) { x0 = E.V[0] ? 1 : 0; E.V[0] = x0; if (x0 && A[2] === 1) { clear(); A[2] = 0; } A[1] = x0; if (snap) A[0] = x0; return true; }
+    switch (k) {
+      case 1: if (!(E.V[1] = 0.01, E.V[2] = 20, take(E))) return false; A[4] = E.V[0]; if (snap) A[3] = A[4]; return true;
+      case 2: if (!(E.V[1] = 0, E.V[2] = 1, take(E))) return false; A[6] = E.V[0]; if (snap) A[5] = A[6]; return true;
+      case 3: var st = E.V[0]; A[15] = st === 4 || st === 8 ? st : 6; E.V[0] = A[15]; return true;
+      case 4: if (!(E.V[1] = 0, E.V[2] = 0.9, take(E))) return false; A[8] = E.V[0]; if (snap) A[7] = A[8]; return true;
+      case 5: if (!(E.V[1] = 0, E.V[2] = 1, take(E))) return false; A[10] = E.V[0]; if (snap) A[9] = A[10]; return true;
+    }
+    return false;
   }
   function step() {
     if (!begin(E, A, D)) return;
@@ -1091,7 +1114,7 @@ export function unitPhaser(E) {
     IO[1] = dg * xR + wg * yR;
     finish(IO, D, A);
   }
-  return unitBase(8, step, set, clear, init, function () { modSettle(A); });
+  return unitBase(8, step, set, clear, [A], function () { modSettle(A); });
 }
 
 // Low-pass (ncLowpass*, hidden: kept for older presets): an RBJ low-pass at Q 0.7071, the cutoff dial 0 (open) to
@@ -1105,7 +1128,8 @@ export function unitLowpass(E) {
   init();
   function clear() { biquadClear(F, 0); }
   function set(k, snap) {
-    if (k === 0) { onFlag(E, A, snap, clear); return true; }
+    var x0;
+    if (k === 0) { x0 = E.V[0] ? 1 : 0; E.V[0] = x0; if (x0 && A[2] === 1) { clear(); A[2] = 0; } A[1] = x0; if (snap) A[0] = x0; return true; }
     if (k !== 1) return false;
     if (!(E.V[1] = 0, E.V[2] = 100, take(E))) return false;
     var c = E.V[0];
@@ -1149,7 +1173,7 @@ export function unitLowpass(E) {
     IO[1] = o * xR + (1 - o) * IO[1];
     finish(IO, D, A);
   }
-  return unitBase(9, step, set, clear, init, settleAll);
+  return unitBase(9, step, set, clear, [A, F], settleAll);
 }
 
 // High-pass and band-pass (ncPass*, hidden): RBJ biquads, coefficients follow the dials every 16 samples while they
@@ -1171,7 +1195,8 @@ function unitPass(E, hp) {
   init();
   function clear() { biquadClear(F, 0); }
   function set(k, snap) {
-    if (k === 0) { onFlag(E, A, snap, clear); return true; }
+    var x0;
+    if (k === 0) { x0 = E.V[0] ? 1 : 0; E.V[0] = x0; if (x0 && A[2] === 1) { clear(); A[2] = 0; } A[1] = x0; if (snap) A[0] = x0; return true; }
     var ny = sr * 0.45, hz;
     if (hp && k === 1) {
       if (!(E.V[1] = 0, E.V[2] = 100, take(E))) return false;
@@ -1231,7 +1256,7 @@ function unitPass(E, hp) {
     }
     finish(IO, D, A);
   }
-  return unitBase(hp ? 10 : 11, step, set, clear, init, settleAll);
+  return unitBase(hp ? 10 : 11, step, set, clear, [A, F], settleAll);
 }
 export function unitHighpass(E) { return unitPass(E, true); }
 export function unitBandpass(E) { return unitPass(E, false); }
