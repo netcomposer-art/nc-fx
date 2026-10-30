@@ -1,9 +1,9 @@
 // Headless Chrome test: serves the repo on a local port (> 5600) and runs test/browser/render.js.
+// PLAYWRIGHT_MODULE points at another Playwright install (one with its browsers) when this repo's has none.
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { chromium } from 'playwright';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const port = +(process.env.NC_FX_TEST_PORT || 5617);
@@ -15,6 +15,7 @@ const server = createServer(async (req, res) => {
   catch { res.writeHead(404).end(); }
 });
 await new Promise((r) => server.listen(port, '127.0.0.1', r));
+const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const browser = await chromium.launch();
 let failed = 1;
 try {

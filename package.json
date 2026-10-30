@@ -1,7 +1,7 @@
 {
   "name": "@netcomposer/nc-fx",
   "version": "0.1.0",
-  "description": "NetComposer's shared effects chain (drive, tempo-synced delay, plate reverb) as a framework-free Web Audio package, with an optional minimal panel.",
+  "description": "NetComposer's shared effects for instruments and the Studio: ASTRID's whole Hacks catalog (drive, delay, reverb, EQ, compressor, width, flanger, chorus, phaser, filters) as a fixed chain or ASTRID's movable slots, framework-free Web Audio, with an optional nc-ui kit panel.",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -21,6 +21,18 @@
     "./dsp": {
       "types": "./src/dsp.d.ts",
       "default": "./src/dsp.js"
+    },
+    "./chain": {
+      "types": "./src/chain.d.ts",
+      "default": "./src/chain.js"
+    },
+    "./catalog": {
+      "types": "./src/catalog.d.ts",
+      "default": "./src/catalog.js"
+    },
+    "./slots": {
+      "types": "./src/slots.d.ts",
+      "default": "./src/slots.js"
     },
     "./params": {
       "types": "./src/params.d.ts",

@@ -41,7 +41,9 @@ export function effectType(t: unknown): FxEffectType | null;
 export function effectDef(type: unknown): FxEffectDef | null;
 export function dialDef(type: unknown, key: string): FxDialDef | null;
 /** Round (to `step`, default 1) and clamp, or snap to an option; non-numbers give the default. */
-export function clampDial(d: FxDialDef, raw: unknown, step?: number | null): number;
+export function clampDial(d: { min: number; max: number; default: number; options?: ReadonlyArray<{ value: number }>; exact?: true; minOn?: number }, raw: unknown, step?: number | null): number;
+/** ASTRID's delay Timing for a raw value: the nearest of ASTRID's notes (no 1/32). */
+export function astridBeats(raw: number): number;
 /** The dial's step given its effect's other dials (`stepWhen`), else `d.step`. */
 export function dialStep(d: FxDialDef, dials?: Record<string, number>): number | null;
 /** Re-clamps the dials whose step depends on another dial, from `raw` (or their current values). */

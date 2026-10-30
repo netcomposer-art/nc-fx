@@ -1,7 +1,10 @@
-// nc-fx AudioWorkletProcessor 'nc-fx@1'. scripts/build.mjs inlines src/dsp.js above this file into
-// dist/worklet.js (one self-contained module, no imports), so the line below is stripped by the build.
+// nc-fx AudioWorkletProcessor 'nc-fx@1'. scripts/build.mjs inlines src/mod.js, src/units.js, src/dsp.js and
+// src/chain.js above this file into dist/worklet.js (one self-contained module, no imports), so the lines below are
+// stripped by the build. processorOptions.slots picks the engine: absent, the fixed chain (createFxDsp); a number,
+// ASTRID's slot chain (createFxChainDsp) with that many slots.
 // nc-fx was created by Peter Semmelhack (https://psem.me/). MIT License.
 import { createFxDsp } from './dsp.js'; // @strip
+import { createFxChainDsp } from './chain.js'; // @strip
 
 var NC_FX_PROCESSOR = 'nc-fx@1';
 
@@ -9,11 +12,13 @@ class NcFxProcessor extends AudioWorkletProcessor {
   constructor(options) {
     super();
     var po = (options && options.processorOptions) || {};
-    this.dsp = createFxDsp(sampleRate, {
-      bypassMode: po.bypassMode, limiter: po.limiter, preGain: po.preGain, maxDelaySeconds: po.maxDelaySeconds, startFrame: currentFrame
-    });
+    var eo = { bypassMode: po.bypassMode, limiter: po.limiter, preGain: po.preGain, maxDelaySeconds: po.maxDelaySeconds, startFrame: currentFrame };
+    this.slots = typeof po.slots === 'number' && po.slots > 0;
+    if (this.slots) eo.slots = po.slots;
+    this.dsp = this.slots ? createFxChainDsp(sampleRate, eo) : createFxDsp(sampleRate, eo);
     if (typeof po.bpm === 'number') this.dsp.setTempo(po.bpm, 0, true);
-    if (po.program) this.dsp.load(po.program, 0, true);
+    if (this.slots) { if (po.chain) this.sync(po.chain, po.order || [], 0); }
+    else if (po.program) this.dsp.load(po.program, 0, true);
     this.alive = true;
     // Calls made on the main thread before this node existed, in call order. A time at or before the
     // current frame is clamped to now (and snaps); a future time is applied exactly. Equal frames keep
@@ -42,11 +47,28 @@ class NcFxProcessor extends AudioWorkletProcessor {
   dispatch(m, frame, snap) {
     var d = this.dsp;
     switch (m.t) {
-      case 'p': d.set(m.i, m.v, frame, snap); break;
-      case 'load': if (m.program) d.load(m.program, frame, snap); break;
+      case 'p': if (!this.slots) d.set(m.i, m.v, frame, snap); break;
+      case 'load': if (!this.slots && m.program) d.load(m.program, frame, snap); break;
       case 'tempo': d.setTempo(m.bpm, frame, snap); break;
       case 'clear': d.clear(frame, m.fadeMs); break;
+      // Slot chain: add an effect (its params follow as snapped 'ps'), set one param, the order to play.
+      case 'add': if (this.slots) d.add(m.uid, m.type, frame); break;
+      case 'ps': if (this.slots) d.set(m.uid, m.k, m.v, frame, snap); break;
+      case 'order': if (this.slots && m.uids) d.order(m.uids, frame, snap || m.immediate === true); break;
+      case 'sync': if (this.slots && m.chain) this.sync(m.chain, m.order || [], frame); break;
     }
+  }
+  /** A whole slot chain at once (the start, or a folded pre-ready queue): adds what is new, snaps every param, plays
+   * the order without a fade. chain: [{uid, type, program: [[k, v], ...]}]. */
+  sync(chain, order, frame) {
+    var d = this.dsp;
+    for (var c = 0; c < chain.length; c++) {
+      var x = chain[c];
+      if (!x || !x.program) continue;
+      if (d.get(x.uid, 0) === undefined) d.add(x.uid, x.type, frame);
+      for (var p = 0; p < x.program.length; p++) d.set(x.uid, x.program[p][0], x.program[p][1], frame, true);
+    }
+    d.order(order, frame, true);
   }
   process(inputs, outputs) {
     if (!this.alive) return false;

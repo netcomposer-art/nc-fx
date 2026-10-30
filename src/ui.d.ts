@@ -1,6 +1,6 @@
-import type { FxCore } from './index.js';
+import type { FxCore, FxSlotCore } from './index.js';
 export interface FxPanelOptions {
-  fx: FxCore;
+  fx: FxCore | FxSlotCore;
   /** Inject the panel CSS into the document (default true). False: link '@netcomposer/nc-fx/ui.css' yourself. */
   injectCss?: boolean;
   /** Only these effects (default all). */

@@ -4,6 +4,12 @@ export type { FxState, FxSlot, FxEffectName, FxEffectType, FxEffectDef, FxDialDe
 export {
   EFFECTS, EFFECT_ORDER, STATE_VERSION, sanitize, migrate, defaultState, delaySeconds, compile, dialToDsp, describeParams, FORMATS
 } from './params.js';
+export type { FxType, FxCatalogEntry, FxCatalogDial, FxFormat, FxLaw } from './catalog.js';
+export { CATALOG, CATALOG_MENU, catalogEntry, catalogDial, formatDial, describeCatalog } from './catalog.js';
+export type { FxSlotState, FxSlotV2, AstridHackSlot } from './slots.js';
+export { SLOTS_VERSION, DEFAULT_SLOTS, migrateSlots, sanitizeSlots, newSlot, slotName, moveSlot, toAstridHacks, toAstridDocument } from './slots.js';
+import type { FxSlotState, AstridHackSlot } from './slots.js';
+import type { FxType } from './catalog.js';
 
 export const PROCESSOR_NAME: 'nc-fx@1';
 
@@ -30,6 +36,12 @@ export interface FxCoreOptions {
    * Nothing is routed from it yet, so the sound is bit-identical with or without it; later dials set its depths.
    */
   modInput?: boolean;
+  /**
+   * ASTRID's chain model instead of the fixed chain: up to this many effects (true = 3, ASTRID's; max 8) of any
+   * catalog type, in any order, with click-free add / remove / move. The state is then v2 (FxSlotState); `state`
+   * also takes v1, ASTRID's saved hacks (HackSlot[]), its widgets, or a schema-2 document.
+   */
+  slots?: true | number;
 }
 export interface FxChange { effect: FxEffectType | null; key: string | null; value: number | boolean | null }
 
@@ -62,11 +74,30 @@ export interface FxCore {
   onChange(cb: (change: FxChange) => void): () => void;
   dispose(): void;
 }
+/** createFxCore(ctx, { slots }): ASTRID's chain model. `ref` is an effect id ('delay-1'), or a type for its first instance. */
+export interface FxSlotCore extends Omit<FxCore, 'setParam' | 'getParam' | 'getState'> {
+  readonly slots: number;
+  setParam(ref: string, key: string, value: number | boolean, at?: number): number | boolean | undefined;
+  getParam(ref: string, key: string): number | boolean | undefined;
+  getState(): FxSlotState;
+  /** Add an effect (default last). Returns its id, or undefined when the chain is full or the type is unknown. */
+  addEffect(type: FxType | 'reverb', opts?: { index?: number; dials?: Record<string, number>; bypass?: boolean; at?: number }): string | undefined;
+  removeEffect(ref: string, opts?: { at?: number }): boolean;
+  moveEffect(ref: string, to: number, opts?: { at?: number }): boolean;
+  getChain(): Array<{ id: string; type: FxType; name: string; bypass: boolean }>;
+  /** ASTRID's saved-hacks shape (settings.hacks) for this chain, and what ASTRID can't hold. */
+  toAstrid(): { hacks: AstridHackSlot[]; lossy: string[] };
+}
+export interface FxSlots extends FxSlotCore {
+  mount(el: HTMLElement, opts?: Omit<FxPanelOptions, 'fx'>): Promise<FxPanel>;
+}
 export interface Fx extends FxCore {
   /** Lazy-loads the panel and renders it into el. If dispose() ran meanwhile, the panel comes back destroyed. */
   mount(el: HTMLElement, opts?: Omit<FxPanelOptions, 'fx'>): Promise<FxPanel>;
 }
 
 export function loadFxWorklet(ctx: BaseAudioContext, moduleUrl?: string | URL): Promise<void>;
+export function createFxCore(ctx: BaseAudioContext, opts: FxCoreOptions & { slots: true | number }): FxSlotCore;
 export function createFxCore(ctx: BaseAudioContext, opts?: FxCoreOptions): FxCore;
+export function createFx(ctx: BaseAudioContext, opts: FxCoreOptions & { slots: true | number }): FxSlots;
 export function createFx(ctx: BaseAudioContext, opts?: FxCoreOptions): Fx;
