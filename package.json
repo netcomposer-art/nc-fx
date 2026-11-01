@@ -30,6 +30,10 @@
       "types": "./src/catalog.d.ts",
       "default": "./src/catalog.js"
     },
+    "./eq": {
+      "types": "./src/eq.d.ts",
+      "default": "./src/eq.js"
+    },
     "./slots": {
       "types": "./src/slots.d.ts",
       "default": "./src/slots.js"

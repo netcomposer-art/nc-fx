@@ -419,6 +419,29 @@ values equal to the ones already scheduled (unless `snap`).
   otherwise the transport's current tempo) and schedules later changes at their times. On a `'shared'` clock
   without a mapper or `toAudioTime`, it applies changes at once and warns once.
 
+## EQ graph
+
+The nc-ui kit draws an EQ's frequency graph (its `eqGraph` control: the curve, a node per band, a live spectrum);
+nc-fx supplies it, so every host shows the same thing:
+
+```js
+import { eqGraph } from '@netcomposer/nc-fx';
+const graph = eqGraph(fx, 'eq-1', {
+  id: 'hack-bass-eq-1-graph',
+  on: fx.getParam('eq-1', 'bypass') === false,
+  set: (key, value) => setDial('eq-1', key, value), // the EQ sliders' own setter
+  help: { graph: '…', low: '…', mid: '…', high: '…' },
+});
+// First in the EQ's kit FX card: { type: 'fx', …, controls: [graph, ...sliders] }
+```
+
+- `response(freqs)` is `eqResponse(dials, sampleRate, freqs)`: the engine's own coefficients (units.js `biquadSet`)
+  on the unit circle, so the curve is what plays (checked against the engine's impulse response within 0.1 dB).
+- Drags, keys and the wheel arrive in Hz, dB and Q; `eqPatchDials` turns them into dial values on each dial's step
+  and calls `set`, so sliders, saves, undo and presets see exactly what a slider move would make.
+- `spectrum` is `fxSpectrum(fx)`: one AnalyserNode (FFT 4096) on the chain's output, shared by its graphs and
+  connected only while one is on screen. It shows the chain's output, after the EQ and anything after it.
+
 ## Worklet: loading the processor in a Vite app
 
 The processor is a single self-contained file, `dist/worklet.js`, with no imports. There are two ways to load it:
