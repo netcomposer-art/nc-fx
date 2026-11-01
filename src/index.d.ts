@@ -5,13 +5,16 @@ export {
   EFFECTS, EFFECT_ORDER, STATE_VERSION, sanitize, migrate, defaultState, delaySeconds, compile, dialToDsp, describeParams, FORMATS
 } from './params.js';
 export type { FxType, FxCatalogEntry, FxCatalogDial, FxFormat, FxLaw } from './catalog.js';
-export { CATALOG, CATALOG_MENU, catalogEntry, catalogDial, formatDial, describeCatalog } from './catalog.js';
+export { CATALOG, CATALOG_MENU, catalogEntry, catalogDial, formatDial, describeCatalog, pluginEntries, onPluginEntry, isPluginType } from './catalog.js';
+export type { FxPluginType, FxPluginEntry, FxPluginInfo, FxPluginStatus, NcPluginManifest, NcPluginManifestClean, NcPluginParam, NcPluginListing, NcPluginRegistry, LoadPluginOptions } from './plugin.js';
+export { PLUGIN_API, PLUGIN_ERRORS, validateManifest, validateRegistry, pluginEntryFromManifest, registerPlugin, loadPlugin, loadListedPlugin, fetchRegistry, sha256Integrity, pluginType, toWamDescriptor, toWamParameterInfo } from './plugin.js';
 export type { FxSlotState, FxSlotV2, AstridHackSlot } from './slots.js';
 export { SLOTS_VERSION, DEFAULT_SLOTS, migrateSlots, sanitizeSlots, newSlot, slotName, moveSlot, toAstridHacks, toAstridDocument } from './slots.js';
 export type { EqDials, EqBand, EqGraphSpec, EqGraphBandSpec, EqGraphOptions, FxSpectrum } from './eq.js';
 export { EQ_LOW_HZ, EQ_HIGH_HZ, EQ_RANGE_DB, eqBands, eqResponse, eqCoefficients, eqGraph, eqPatchDials, eqResetDials, fxSpectrum } from './eq.js';
 import type { FxSlotState, AstridHackSlot } from './slots.js';
 import type { FxType } from './catalog.js';
+import type { FxPluginType, FxPluginStatus } from './plugin.js';
 
 export const PROCESSOR_NAME: 'nc-fx@1';
 
@@ -96,10 +99,11 @@ export interface FxSlotCore extends Omit<FxCore, 'setParam' | 'getParam' | 'getS
   getParam(ref: string, key: string): number | boolean | undefined;
   getState(): FxSlotState;
   /** Add an effect (default last). Returns its id, or undefined when the chain is full or the type is unknown. */
-  addEffect(type: FxType | 'reverb', opts?: { index?: number; dials?: Record<string, number>; bypass?: boolean; at?: number }): string | undefined;
+  addEffect(type: FxType | 'reverb' | FxPluginType, opts?: { index?: number; dials?: Record<string, number>; bypass?: boolean; at?: number }): string | undefined;
   removeEffect(ref: string, opts?: { at?: number }): boolean;
   moveEffect(ref: string, to: number, opts?: { at?: number }): boolean;
-  getChain(): Array<{ id: string; type: FxType; name: string; bypass: boolean }>;
+  /** `plugin` on a plugin's slot: whether it plays (ready), waits for its plugin (missing) or was stopped (failed). */
+  getChain(): Array<{ id: string; type: FxType | FxPluginType; name: string; bypass: boolean; plugin?: FxPluginStatus }>;
   /** One effect's level meter (`ref` its id: its input and output peaks), or the whole chain's (omitted). */
   meter(ref?: string): FxMeter;
   /** ASTRID's saved-hacks shape (settings.hacks) for this chain, and what ASTRID can't hold. */

@@ -129,15 +129,37 @@ export var CATALOG_TYPES = CATALOG.map(function (e) { return e.type; });
 export var CATALOG_MENU = CATALOG.filter(function (e) { return !e.hidden; }).map(function (e) { return e.type; });
 
 var ALIAS = { reverb: 'plate' };
-/** A catalog type for a name ('reverb' is 'plate'), or null. */
+// Plugins (src/plugin.js, docs/plugins.md): entries added at run time, one per registered plugin, type
+// 'plugin:<id>', in the same shape as CATALOG's (plus `plugin`, its manifest's facts). They are never in CATALOG,
+// CATALOG_TYPES or CATALOG_MENU, so the built-in catalog stays as it is; catalogType() and catalogEntry() find them.
+var PLUGIN_ENTRIES = {}, PLUGIN_ORDER = [], PLUGIN_LISTENERS = [];
+/** Add (or replace) a plugin's catalog entry; listeners hear its type. Used by src/plugin.js registerPlugin(). */
+export function addPluginEntry(entry) {
+  if (!PLUGIN_ENTRIES[entry.type]) PLUGIN_ORDER.push(entry.type);
+  PLUGIN_ENTRIES[entry.type] = entry;
+  for (var i = 0; i < PLUGIN_LISTENERS.length; i++) {
+    try { PLUGIN_LISTENERS[i](entry.type); } catch (e) { if (typeof console !== 'undefined') console.error(e); }
+  }
+}
+/** The registered plugins' catalog entries, in registration order. */
+export function pluginEntries() { return PLUGIN_ORDER.map(function (t) { return PLUGIN_ENTRIES[t]; }); }
+/** cb(type) after each plugin registers. Returns an unsubscribe function. */
+export function onPluginEntry(cb) {
+  PLUGIN_LISTENERS.push(cb);
+  return function () { var i = PLUGIN_LISTENERS.indexOf(cb); if (i >= 0) PLUGIN_LISTENERS.splice(i, 1); };
+}
+/** A plugin type ('plugin:<id>'), registered or not. */
+export function isPluginType(t) { return typeof t === 'string' && /^plugin:[a-z0-9]+(?:[.-][a-z0-9]+)*$/.test(t) && t.length <= 71; }
+/** A catalog type for a name ('reverb' is 'plate'; a registered plugin's 'plugin:<id>'), or null. */
 export function catalogType(t) {
   var x = ALIAS[t] || t;
-  return CATALOG_TYPES.indexOf(x) >= 0 ? x : null;
+  if (CATALOG_TYPES.indexOf(x) >= 0) return x;
+  return typeof x === 'string' && PLUGIN_ENTRIES[x] ? x : null;
 }
 export function catalogEntry(type) {
   var t = catalogType(type);
   for (var i = 0; i < CATALOG.length; i++) if (CATALOG[i].type === t) return CATALOG[i];
-  return null;
+  return t && PLUGIN_ENTRIES[t] ? PLUGIN_ENTRIES[t] : null;
 }
 export function catalogDial(type, key) {
   var e = catalogEntry(type);
@@ -197,5 +219,5 @@ export function formatDial(dial, v, bpm) {
   return String(v);
 }
 
-/** The catalog as JSON (a deep copy: hosts can keep or change it freely). */
+/** The catalog as JSON (a deep copy: hosts can keep or change it freely). Plugins: pluginEntries(). */
 export function describeCatalog() { return JSON.parse(JSON.stringify(CATALOG)); }

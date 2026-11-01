@@ -12,7 +12,7 @@
 //     true, each dial through dialValue;
 //   - ASTRID's worklet widgets (HackWidget[], params in DSP units) and the site's schema-2 document
 //     ({ schema: 2, chain: [...widgets, limiter] }): each param back to its dial through the inverse of hacks.ts's law.
-import { CATALOG_TYPES, catalogEntry, catalogType, dialDsp, lawValue, delaySeconds, ASTRID_NOTES } from './catalog.js';
+import { CATALOG_TYPES, catalogEntry, catalogType, dialDsp, lawValue, delaySeconds, ASTRID_NOTES, isPluginType } from './catalog.js';
 import { clampDial, dialStep, astridBeats } from './params.js';
 
 export var SLOTS_VERSION = 2;
@@ -22,22 +22,44 @@ var ID = /^[A-Za-z0-9][A-Za-z0-9 _./:+-]{0,63}$/;
 
 function isRecord(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
 
+// A plugin slot (docs/plugins.md) also carries `plugin`: { id, version, url, name }, what a host needs to load the
+// plugin again. A slot whose plugin isn't registered on this page is kept as saved (its dials as plain numbers):
+// it plays as a wire ("missing") until the plugin registers, and saves back unchanged.
+var SEMVER = /^\d+\.\d+\.\d+$/;
+function cleanRef(raw, type) {
+  var r = isRecord(raw) ? raw : {}, id = type.slice(7);
+  var ref = { id: id, version: typeof r.version === 'string' && SEMVER.test(r.version) ? r.version : '0.0.0', url: '', name: id };
+  if (typeof r.url === 'string' && r.url.length <= 2048 && /^https?:\/\//.test(r.url)) ref.url = r.url;
+  if (typeof r.name === 'string' && r.name.trim()) ref.name = r.name.trim().slice(0, 40);
+  return ref;
+}
+function pluginRefOf(e) { var p = e.plugin; return { id: p.id, version: p.version, url: p.url, name: e.label }; }
+function rawDials(raw) {
+  var out = {}, n = 0;
+  if (isRecord(raw)) for (var k in raw) if (n < 16 && /^[a-z][a-z0-9_]{0,31}$/.test(k) && typeof raw[k] === 'number' && isFinite(raw[k])) { out[k] = raw[k]; n++; }
+  return out;
+}
+function idBase(e) { return e.plugin ? e.plugin.idBase : e.type; }
+
 /** A new slot at the catalog's starting dials, with an id not yet in the chain (ASTRID's createHack). */
 export function newSlot(type, chain) {
   var e = catalogEntry(type);
   if (!e) return null;
   var used = {};
   (chain || []).forEach(function (h) { if (h && h.id) used[h.id] = true; });
-  var n = 1;
-  while (used[e.type + '-' + n]) n++;
+  var n = 1, base = idBase(e);
+  while (used[base + '-' + n]) n++;
   var dials = {};
   e.dials.forEach(function (d) { dials[d.key] = d.default; });
-  return { id: e.type + '-' + n, type: e.type, bypass: false, dials: dials };
+  var s = { id: base + '-' + n, type: e.type, bypass: false, dials: dials };
+  if (e.plugin) s.plugin = pluginRefOf(e);
+  return s;
 }
 /** "Drive", or "Drive 2" for a second one (ASTRID's nameOf). */
 export function slotName(slot) {
   var e = catalogEntry(slot.type), m = /-(\d+)$/.exec(slot.id || '');
-  return (e ? e.label : slot.type) + (m && +m[1] > 1 ? ' ' + m[1] : '');
+  var label = e ? e.label : slot.plugin && slot.plugin.name ? slot.plugin.name : slot.type;
+  return label + (m && +m[1] > 1 ? ' ' + m[1] : '');
 }
 /** The chain with one slot moved (indexes clamped); the same array if nothing moves (ASTRID's moveHack). */
 export function moveSlot(chain, from, to) {
@@ -58,7 +80,7 @@ function cleanDials(e, raw, astrid) {
     var v = raw[d.key];
     if (v === undefined && d.astridKey) v = raw[d.astridKey];
     if (astrid && e.type === 'delay' && d.key === 'delay_beats') v = snapBeats(v);
-    out[d.key] = clampDial(d, v);
+    out[d.key] = e.plugin ? clampDial(d, v, d.step) : clampDial(d, v); // a plugin's float dials keep their step
   });
   // A dial whose step depends on another (drive_db: 0.1 dB in Acid) is clamped again with the right step.
   e.dials.forEach(function (d) { if (d.stepWhen) out[d.key] = clampDial(d, typeof raw[d.key] === 'number' ? raw[d.key] : out[d.key], dialStep(d, out)); });
@@ -107,6 +129,14 @@ export function migrateSlots(raw, max) {
     if (!isRecord(item)) continue;
     if (item.type === 'limiter' || item.fixed === true) continue; // schema 2's fixed limiter: not a slot
     var type = catalogType(item.type), e = type && catalogEntry(type);
+    if (!e && !fromFixed && isPluginType(item.type)) { // a plugin that isn't registered here: kept as saved
+      if (out.length >= cap) { dropped.push(item.id || item.type); continue; }
+      var ref = cleanRef(item.plugin, item.type), base = ref.id.split('.').pop(), n = 1;
+      while (out.some(function (h) { return h.id === base + '-' + n; })) n++;
+      var pid = typeof item.id === 'string' && ID.test(item.id) && !out.some(function (h) { return h.id === item.id; }) ? item.id : base + '-' + n;
+      out.push({ id: pid, type: item.type, bypass: item.bypass === true, dials: rawDials(item.dials), plugin: ref });
+      continue;
+    }
     if (!e || (fromFixed && ['drive', 'delay', 'plate'].indexOf(type) < 0)) { if (typeof item.type === 'string') dropped.push(item.type); continue; }
     if (out.length >= cap) { dropped.push(item.id || type); continue; } // over the cap: keep the first (ASTRID)
     var dials;
@@ -116,7 +146,12 @@ export function migrateSlots(raw, max) {
     var id = typeof item.id === 'string' && ID.test(item.id) && !out.some(function (h) { return h.id === item.id; }) ? item.id : fresh.id;
     // v1 (nc-fx's fixed chain) is bypassed unless explicitly false; ASTRID's and v2's only when true.
     var bypass = fromFixed ? item.bypass !== false : item.bypass === true;
-    out.push({ id: fromFixed ? fresh.id : id, type: type, bypass: bypass, dials: dials });
+    var slot = { id: fromFixed ? fresh.id : id, type: type, bypass: bypass, dials: dials };
+    if (e.plugin) {
+      // Registered here: the ref is the plugin that plays (its version and where it was loaded from).
+      slot.plugin = pluginRefOf(e);
+    }
+    out.push(slot);
   }
   return { state: { v: SLOTS_VERSION, chain: out }, dropped: dropped, notes: notes };
 }
@@ -126,6 +161,7 @@ export function sanitizeSlots(raw, max) { return migrateSlots(raw, max).state; }
 /** The engine params for one slot: [k, value] pairs (k 0 = on), DSP units. */
 export function slotProgram(slot) {
   var e = catalogEntry(slot.type), out = [[0, slot.bypass ? 0 : 1]];
+  if (!e) return out; // a missing plugin: nothing to play
   e.dials.forEach(function (d) { out.push([d.k, dialDsp(d, slot.dials[d.key])]); });
   return out;
 }
@@ -138,7 +174,11 @@ export function slotProgram(slot) {
  */
 export function toAstridHacks(state) {
   var s = sanitizeSlots(state, 8), lossy = [];
-  var hacks = s.chain.map(function (h, i) {
+  var hacks = s.chain.filter(function (h) {
+    if (!h.plugin) return true;
+    lossy.push(h.id + ': ASTRID has no plugins');
+    return false;
+  }).map(function (h, i) {
     var e = catalogEntry(h.type), dials = {};
     if (i >= DEFAULT_SLOTS) lossy.push(h.id + ': ASTRID keeps three hacks');
     e.dials.forEach(function (d) {
@@ -177,7 +217,7 @@ function dialOf(e, key) { for (var i = 0; i < e.dials.length; i++) if (e.dials[i
 /** The site's schema-2 document (hacks.ts hackChainDocument): the widgets, then the fixed limiter. */
 export function toAstridDocument(state, tempo) {
   var s = sanitizeSlots(state, 8);
-  return { schema: 2, chain: s.chain.map(function (h) { return { id: h.id, type: h.type, version: 1, bypass: h.bypass, params: astridParams(h, tempo) }; })
+  return { schema: 2, chain: s.chain.filter(function (h) { return !h.plugin; }).map(function (h) { return { id: h.id, type: h.type, version: 1, bypass: h.bypass, params: astridParams(h, tempo) }; })
     .concat([{ id: 'limiter', type: 'limiter', version: 1, bypass: false, fixed: true, params: {} }]) };
 }
 void CATALOG_TYPES;

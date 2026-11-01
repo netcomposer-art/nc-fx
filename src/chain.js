@@ -10,11 +10,19 @@
 // in the worklet's message handler, never in process()); after that adding, removing and reordering allocate nothing.
 // The host names each effect instance with a positive integer uid (createFxCore does this); uids are never reused.
 //
+// Plugins (src/plugin-host.js, docs/plugins.md): a registered plugin is one more unit type (code PLUGIN_BASE + n),
+// added by its engine name ('plugin:<id>@<version>'). While no plugin box is in the order playing, render() is the
+// same per-sample code as before plugins existed (test/plugin-zero-cost.test.mjs holds it sample-identical to the
+// previous build). With one in the order, renderPlug() runs the chain stage by stage over runs of up to 128 frames,
+// each built-in box sample by sample exactly as render() would and each plugin box as one block; a reorder's fade
+// swaps orders only at the end of a run, so that is sample-identical for the built-in boxes too.
+//
 // Events (sample-accurate, the same queue as createFxDsp): add (the box goes live: ncChainAdd), order (ncChainOrder;
 // snap = immediate, as ncChainSet's), a param (ncChainPatch), tempo, clear (ncChainClear).
 
 import { createFxEnv, createUnit, UNIT_TYPES, CLEAR_CHUNK, PI, OP_CLEAR, OP_FADE_BEGIN, OP_FADE_WORK, OP_FADE_DONE, OP_FADE_IDLE, OP_SLEEP, OP_BLOCK, OP_MOD_ON, OP_GRID_ON, OP_GRID, OP_SETTLE, OP_RESET } from './units.js'; // @strip
 import { createLimiter, createQueue, fadeStep, meterInput, EV_TEMPO, EV_CLEAR, HORIZON_S, MOD_GRID, QUEUE_SIZE, QUEUE_EMPTY } from './dsp.js'; // @strip
+import { NC_PLUGINS, PLUGIN_BASE, PLUGIN_BLOCK, OP_ERR, pluginCode, createPluginUnit } from './plugin-host.js'; // @strip
 
 var EV_ADD = -1000;   // EV_ADD - b: box b goes live
 var EV_ORDER = -2000; // EV_ORDER - l: order list l
@@ -197,7 +205,7 @@ export function createFxChainDsp(sampleRate, opts) {
    * live one that is in neither order (dropped by a clear mid-reorder, or never ordered), oldest first. */
   function pickBox(t) {
     var best = -1, b;
-    for (b = 0; b < NB; b++) if (STATE[b] === 0 && POOL[b][t] !== null && (best < 0 || AGE[b] < AGE[best])) best = b;
+    for (b = 0; b < NB; b++) if (STATE[b] === 0 && POOL[b][t] != null && (best < 0 || AGE[b] < AGE[best])) best = b;
     if (best >= 0) return best;
     for (b = 0; b < NB; b++) if (STATE[b] === 0 && (best < 0 || AGE[b] < AGE[best])) best = b;
     if (best >= 0) return best;
@@ -247,6 +255,64 @@ export function createFxChainDsp(sampleRate, opts) {
     }
     T[2] = pL; T[3] = pR;
   }
+  /** A plugin box in the order playing. */
+  function plugged() { for (var m = 0; m < ON[0]; m++) if (TYPE[ORD[m]] >= PLUGIN_BASE) return true; return false; }
+  // Runs: up to PLUGIN_BLOCK frames, ending where a reorder's fade-out swaps the order (fade(): FD[1] reaches FD[2]),
+  // so each run plays one order. Without a plugin in it, a run is render()'s, unchanged.
+  function renderRuns(inL, inR, outL, outR, from, to) {
+    while (from < to) {
+      var end = to;
+      if (FD[0] === 1 && HAS[0] === 1) { var left = FD[2] - FD[1]; if (left >= 1 && from + left < end) end = from + left; }
+      if (plugged()) { if (end - from > PLUGIN_BLOCK) end = from + PLUGIN_BLOCK; renderPlug(inL, inR, outL, outR, from, end); }
+      else render(inL, inR, outL, outR, from, end);
+      from = end;
+    }
+  }
+  var BL = new Float64Array(PLUGIN_BLOCK), BR = new Float64Array(PLUGIN_BLOCK), FCB = new Float64Array(PLUGIN_BLOCK);
+  /** render() stage by stage (frames from..to, at most PLUGIN_BLOCK): the same arithmetic per built-in box. */
+  function renderPlug(inL, inR, outL, outR, from, to) {
+    var n = to - from, j, m, b, u, a, c;
+    for (j = 0; j < n; j++) {
+      var xL = inL ? inL[from + j] : 0;
+      var xR = inR ? inR[from + j] : xL;
+      if (xL !== xL || xL === Infinity || xL === -Infinity) xL = 0;
+      if (xR !== xR || xR === Infinity || xR === -Infinity) xR = 0;
+      BL[j] = xL; BR[j] = xR;
+      if (fadeStep(FC)) for (b = 0; b < NB; b++) if (STATE[b] === 2) CUR[b].ctl(OP_FADE_BEGIN, 0);
+      FCB[j] = FC[1];
+    }
+    var fcEnd = FC[1], on = ON[0];
+    for (m = 0; m < on; m++) {
+      b = ORD[m]; u = CUR[b];
+      if (MT[0] === 1) for (j = 0; j < n; j++) { a = BL[j]; c = BR[j]; if (a < 0) a = -a; if (c < 0) c = -c; if (c > a) a = c; if (a > MIN[b]) MIN[b] = a; }
+      if (TYPE[b] >= PLUGIN_BASE) u.run(BL, BR, 0, n);
+      else {
+        for (j = 0; j < n; j++) {
+          IO[0] = BL[j]; IO[1] = BR[j]; FC[1] = FCB[j];
+          u.step(from + j);
+          BL[j] = IO[0]; BR[j] = IO[1];
+        }
+      }
+      if (MT[0] === 1) for (j = 0; j < n; j++) { a = BL[j]; c = BR[j]; if (a < 0) a = -a; if (c < 0) c = -c; if (c > a) a = c; if (a > MOUT[b]) MOUT[b] = a; }
+    }
+    FC[1] = fcEnd;
+    var pL = T[2], pR = T[3];
+    for (j = 0; j < n; j++) {
+      IO[0] = BL[j]; IO[1] = BR[j];
+      fade();
+      lim.step();
+      var yL = IO[0], yR = IO[1];
+      outL[from + j] = yL;
+      if (outR && outR !== outL) outR[from + j] = yR;
+      if (yL < 0) yL = -yL;
+      if (yR < 0) yR = -yR;
+      if (yL > pL) pL = yL;
+      if (yR > pR) pR = yR;
+    }
+    T[2] = pL; T[3] = pR;
+  }
+  // Plugin errors (plugin-host.js): a box's code once it fails, reported once per add.
+  var ERR = new Int32Array(NB), ERRN = new Int32Array(1);
   // clear({fadeMs}): every live box's tail (delay, plate) is zeroed CLEAR_CHUNK samples per block while the wet is 0.
   function fadeClearSome() {
     if (FC[0] !== 2) return;
@@ -278,23 +344,34 @@ export function createFxChainDsp(sampleRate, opts) {
     },
     /** Floats takeMeter() may write. */
     meterSize: 3 + 3 * NB,
+    /** Plugin failures not yet taken (a host checks errorsPending[0] after each process()). */
+    errorsPending: ERRN,
+    /** Each newly failed plugin box as uid, code pairs into `out` (Int32Array of 2 * (2 * slots + 2)); the count. */
+    takeErrors: function (out) {
+      var c = 0;
+      for (var b = 0; b < NB; b++) if (ERR[b] > 0 && STATE[b] !== 0) { out[c * 2] = UID[b]; out[c * 2 + 1] = ERR[b]; ERR[b] = -ERR[b]; c++; }
+      ERRN[0] = 0;
+      return c;
+    },
+    /** The engine name ('plugin:<id>@<version>') is registered in this scope. */
+    hasPlugin: function (name) { return pluginCode(name) >= 0; },
     /**
      * Add an effect instance (uid > 0, never reused; type a UNIT_TYPES name or code) at a frame. It starts at the
      * unit's defaults, off; set its params (snap) at the same frame, then order() it in. Allocates the first time a
      * box holds this type (control path only). False if refused (bad type, uid in use, no box, frame too far).
      */
     add: function (uid, type, frame) {
-      var t = typeof type === 'number' ? type | 0 : UNIT_TYPES.indexOf(type);
+      var t = typeof type === 'number' ? type | 0 : typeof type === 'string' && type.indexOf('plugin:') === 0 ? pluginCode(type) : UNIT_TYPES.indexOf(type);
       uid = uid | 0;
-      if (!(t >= 0 && t < NTYPES) || uid <= 0 || boxOf(uid) >= 0) return false;
+      if (!((t >= 0 && t < NTYPES) || (t >= PLUGIN_BASE && t < PLUGIN_BASE + NC_PLUGINS.length)) || uid <= 0 || boxOf(uid) >= 0) return false;
       var b = pickBox(t);
       if (b < 0) return false;
-      if (POOL[b][t] === null) POOL[b][t] = createUnit(E, t);
+      if (POOL[b][t] == null) POOL[b][t] = t >= PLUGIN_BASE ? createPluginUnit(E, t) : createUnit(E, t);
       var u = POOL[b][t];
       u.ctl(OP_RESET, 0);
       u.retarget(true);
       for (var k = 0; k < MAXK; k++) PRM[b * MAXK + k] = 0;
-      TYPE[b] = t; UID[b] = uid; CUR[b] = u; STATE[b] = 1; AGE[b] = ++clock;
+      TYPE[b] = t; UID[b] = uid; CUR[b] = u; STATE[b] = 1; AGE[b] = ++clock; ERR[b] = 0;
       if (!schedule(EV_ADD - b, 0, frame, 0)) { STATE[b] = 0; CUR[b] = IDLE; return false; }
       return true;
     },
@@ -352,13 +429,13 @@ export function createFxChainDsp(sampleRate, opts) {
           var nb = i + MOD_GRID - ph;
           if (nb < end) end = nb;
         }
-        render(inL, inR, outL, outR, i, end);
+        renderRuns(inL, inR, outL, outR, i, end);
         i = end;
       }
       T[1] = start + frames;
       peak[0] = T[2]; peak[1] = T[3];
       if (MT[0] === 1) { if (T[2] > MC[1]) MC[1] = T[2]; if (T[3] > MC[1]) MC[1] = T[3]; }
-      for (b = 0; b < NB; b++) if (STATE[b] !== 0) { CUR[b].ctl(OP_SETTLE, 0); CUR[b].ctl(OP_SLEEP, 0); }
+      for (b = 0; b < NB; b++) if (STATE[b] !== 0) { CUR[b].ctl(OP_SETTLE, 0); CUR[b].ctl(OP_SLEEP, 0); if (TYPE[b] >= PLUGIN_BASE && ERR[b] === 0) { ERR[b] = CUR[b].ctl(OP_ERR, 0); if (ERR[b] !== 0) ERRN[0]++; } }
       fadeClearSome();
     }
   };

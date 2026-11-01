@@ -1,0 +1,18 @@
+{
+  "$schema": "https://raw.githubusercontent.com/netcomposer-art/nc-fx/main/schema/plugin-manifest.schema.json",
+  "ncPlugin": 1,
+  "id": "netcomposer.tremolo",
+  "name": "Tremolo",
+  "version": "1.0.0",
+  "author": "Peter Semmelhack",
+  "licence": "MIT",
+  "description": "The level goes up and down. Rate, depth and shape.",
+  "website": "https://github.com/netcomposer-art/nc-plugin-template",
+  "keywords": ["tremolo", "modulation"],
+  "dsp": "tremolo.dsp.js",
+  "params": [
+    { "id": "rate", "label": "Rate", "type": "float", "minValue": 0.1, "maxValue": 20, "defaultValue": 5, "discreteStep": 0.1, "units": "Hz" },
+    { "id": "depth", "label": "Depth", "type": "float", "minValue": 0, "maxValue": 100, "defaultValue": 50, "discreteStep": 1, "units": "%" },
+    { "id": "shape", "label": "Shape", "type": "choice", "choices": ["Sine", "Triangle", "Square"], "defaultValue": 0 }
+  ]
+}

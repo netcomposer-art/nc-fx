@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/netcomposer-art/nc-fx/main/schema/plugin-registry.schema.json",
+  "title": "NetComposer listed plugins (registry.json)",
+  "description": "The reviewed plugins the Studio offers in Add > Plugins (netcomposer.art/plugins/registry.json). Each file's sha256 is checked before its code runs. Listing is by pull request to netcomposer-art/netcomposer.art, after review and a passing nc-fx-check.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "plugins"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "v": { "const": 1 },
+    "plugins": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name", "version", "author", "licence", "manifest", "integrity", "checked"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$" },
+          "name": { "type": "string", "minLength": 1, "maxLength": 40 },
+          "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+          "author": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "licence": { "type": "string" },
+          "description": { "type": "string", "maxLength": 200 },
+          "manifest": { "type": "string", "description": "plugin.json's address, relative to registry.json." },
+          "integrity": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["manifest", "dsp"],
+            "properties": {
+              "manifest": { "type": "string", "pattern": "^sha256-[A-Za-z0-9+/]{43}=$" },
+              "dsp": { "type": "string", "pattern": "^sha256-[A-Za-z0-9+/]{43}=$" }
+            }
+          },
+          "checked": { "type": "string", "description": "When it was reviewed and passed nc-fx-check, and with which nc-fx (e.g. \"2026-11-01, nc-fx 1a2b3c4\")." },
+          "source": { "type": "string", "description": "Where its source lives (a repository)." }
+        }
+      }
+    }
+  }
+}

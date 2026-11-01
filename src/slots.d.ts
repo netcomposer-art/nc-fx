@@ -1,5 +1,6 @@
 import type { FxType } from './catalog.js';
-export interface FxSlotV2 { id: string; type: FxType; bypass: boolean; dials: Record<string, number> }
+/** `plugin` on a plugin's slot: what a host needs to load it again (a missing plugin's slot keeps it as saved). */
+export interface FxSlotV2 { id: string; type: FxType | `plugin:${string}`; bypass: boolean; dials: Record<string, number>; plugin?: { id: string; version: string; url: string; name: string } }
 /** The slot chain's state: first to last; the limiter is fixed after the last. JSON-safe. */
 export interface FxSlotState { v: 2; chain: FxSlotV2[] }
 /** ASTRID's saved hack (hacks.ts HackSlot). */

@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+**Insert plugins** (feat/plugins, Peter 2026-11-01: "Do it"):
+
+- **The contract.** A plugin is `plugin.json` (`ncPlugin: 1`, id, name, version, author, licence, params with
+  WAM 2.0's field names) and one DSP script for the AudioWorklet that calls `registerNcFxPlugin({ id, version,
+  params, create(sampleRate) })`. JSON Schemas in `schema/`, types in `src/plugin.d.ts` and
+  `src/plugin-worklet.d.ts`, the guide in `docs/plugins.md`.
+- **Main thread** (`src/plugin.js`, also from the index): `validateManifest`, `registerPlugin` (a catalog entry
+  `plugin:<id>` in CATALOG's shape: `catalogEntry`, `pluginEntries`, `onPluginEntry`; never in CATALOG or
+  CATALOG_MENU), `loadPlugin(ctx, url, { integrity })` (https, or http on localhost; the fetched bytes run from a
+  Blob URL), `fetchRegistry`, `validateRegistry`, `loadListedPlugin` (sha256 for both files), `sha256Integrity`,
+  `toWamDescriptor`, `toWamParameterInfo`, `PLUGIN_ERRORS`.
+- **Slot chain.** A plugin slot keeps `plugin: { id, version, url, name }` in v2 state. A slot whose plugin isn't
+  registered loads as saved and plays as a wire (`getChain()[i].plugin.status: 'missing'`), and joins click-free
+  when the plugin registers. ASTRID exports leave plugin slots out (reported in `lossy`).
+- **Worklet** (`src/plugin-host.js`, `src/chain.js`): a registered plugin is one more unit type. With one in the
+  order playing, `renderPlug()` runs the chain stage by stage in runs of up to 128 frames (built-in boxes sample by
+  sample, as before; a reorder's swap lands at the end of a run). The plugin unit does the On/Off crossfade
+  (bypassed = bit-exact input), `'hold'` sleep, subnormal flush, and a guard: a throw, NaN, infinity or a sample past
+  ±64 stops the plugin, passes the slot's input and posts `{ t: 'perr' }` once; the chain reports `status: 'failed'`.
+- **Zero cost.** With no plugin in a chain, the worklet renders exactly what 085e5b0 rendered
+  (`test/plugin-zero-cost.test.mjs`, against that build's `dist/worklet.js`, through adds, reorders, removes, dials,
+  bypass, tempo, clears and meters).
+- **Checker:** `nc-fx-check <folder | plugin.json | URL> [--json] [--browser]` (`scripts/check-plugin.mjs`, the
+  package's `bin`): manifest, DSP file, registration vs manifest, create/set at every edge, NaN / infinity / level /
+  subnormal output over 6 signals x 15 settings, input untouched, runaway tails, clicks on dial jumps, block sizes,
+  CPU per block against a budget, denormal slowdown, allocation (heap-delta gate in a child process), bypass
+  through the real worklet engine, and (with Playwright) a real AudioWorklet in Chromium. PASS / FAIL lines with a
+  fix each; exit 1 on a failure.
+- CI runs the checker on the tremolo fixture, in Chromium too.
+
 **EQ graph** (ui/eq-graph, Peter 2026-11-01: "a real-time visualizer ... that shows the frequency cuts and boosts"):
 
 - `@netcomposer/nc-fx/eq` (also from the index): `eqResponse(dials, sampleRate, freqs)` (the combined curve and each

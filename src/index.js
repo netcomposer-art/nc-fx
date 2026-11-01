@@ -13,7 +13,10 @@ import {
   EFFECTS, EFFECT_ORDER, STATE_VERSION, effectType, effectDef, dialDef, clampDial, dialStep, dialToDsp, PARAM_INDEX,
   sanitize, migrate, compile, cloneState, defaultState, delaySeconds, describeParams, FORMATS
 } from './params.js';
-import { CATALOG, CATALOG_MENU, catalogType, catalogEntry, catalogDial, formatDial, describeCatalog } from './catalog.js';
+import { CATALOG, CATALOG_MENU, catalogType, catalogEntry, catalogDial, formatDial, describeCatalog, onPluginEntry, pluginEntries, isPluginType } from './catalog.js';
+import { PLUGIN_ERRORS } from './plugin.js';
+export { PLUGIN_API, PLUGIN_ERRORS, validateManifest, validateRegistry, pluginEntryFromManifest, registerPlugin, loadPlugin, loadListedPlugin, fetchRegistry, sha256Integrity, pluginType, toWamDescriptor, toWamParameterInfo } from './plugin.js';
+export { pluginEntries, onPluginEntry, isPluginType };
 import { SLOTS_VERSION, DEFAULT_SLOTS, migrateSlots, sanitizeSlots, newSlot, slotName, moveSlot, slotProgram, toAstridHacks, toAstridDocument } from './slots.js';
 export { EQ_LOW_HZ, EQ_HIGH_HZ, EQ_RANGE_DB, eqBands, eqResponse, eqCoefficients, eqGraph, eqPatchDials, eqResetDials, fxSpectrum } from './eq.js';
 
@@ -132,6 +135,7 @@ function createHost(ctx, o, start, fold) {
     H.node.port.onmessage = function (e) {
       var m = e.data;
       if (m && m.t === 'lv' && H.mUsers > 0) { H.lv = m.d; H.lvAt = nowMs(); }
+      else if (m && m.t === 'perr' && H.onPluginError && m.d) for (var j = 0; j < (m.n | 0); j++) H.onPluginError(m.d[2 * j], m.d[2 * j + 1]);
     };
     input.connect(H.node);
     if (modInput) modInput.connect(H.node, 0, 1);
@@ -325,12 +329,24 @@ function createSlotCore(ctx, o) {
   var N = o.slots === true ? DEFAULT_SLOTS : Math.max(1, Math.min(MAX_SLOTS, Math.floor(+o.slots) || DEFAULT_SLOTS));
   var state = sanitizeSlots(o.state, N);
   var nextUid = 1, uids = {}; // slot id -> uid
+  // Plugins (docs/plugins.md): a plugin slot plays once its plugin is registered on this page ("live"); until then
+  // it stays in the state as saved and the chain plays as if it weren't there. errors: slot id -> the worklet's code.
+  var errors = {};
+  function live(s) { return !isPluginType(s.type) || catalogEntry(s.type) !== null; }
+  function engineType(s) { var e = catalogEntry(s.type); return e && e.plugin ? e.plugin.engine : s.type; }
   function uidFor(slot) { if (!uids[slot.id]) uids[slot.id] = nextUid++; return uids[slot.id]; }
-  function wire(chain) { return chain.map(function (s) { return { uid: uidFor(s), type: s.type, program: slotProgram(s) }; }); }
-  var start = wire(state.chain), startOrder = state.chain.map(function (s) { return uids[s.id]; });
+  function wire(chain) { return chain.filter(live).map(function (s) { return { uid: uidFor(s), type: engineType(s), program: slotProgram(s) }; }); }
+  function playOrder() { return state.chain.filter(live).map(function (s) { return uids[s.id]; }); }
+  var start = wire(state.chain), startOrder = playOrder();
   var H = createHost(ctx, o, function () { return { slots: N, chain: start, order: startOrder }; },
-    function () { return [{ t: 'sync', chain: wire(state.chain), order: state.chain.map(function (s) { return uids[s.id]; }), when: 0 }]; });
+    function () { return [{ t: 'sync', chain: wire(state.chain), order: playOrder(), when: 0 }]; });
   var core = H.core;
+  H.onPluginError = function (uid, code) {
+    for (var id in uids) if (uids[id] === uid) {
+      errors[id] = code;
+      H.emit({ effect: id, key: 'error', value: code });
+    }
+  };
 
   /** A slot by id, or the first of a type ('delay', 'reverb'). */
   function find(ref) {
@@ -342,18 +358,19 @@ function createSlotCore(ctx, o) {
   }
   function postSlot(s, when) {
     var uid = uidFor(s);
-    H.post({ t: 'add', uid: uid, type: s.type, when: when });
+    H.post({ t: 'add', uid: uid, type: engineType(s), when: when });
     slotProgram(s).forEach(function (p) { H.post({ t: 'ps', uid: uid, k: p[0], v: p[1], when: when, snap: true }); });
   }
-  function postOrder(when) { H.post({ t: 'order', uids: state.chain.map(function (s) { return uids[s.id]; }), when: when }); }
+  function postOrder(when) { H.post({ t: 'order', uids: playOrder(), when: when }); }
   /** Go to `next` (a clean v2 state) the way ASTRID's HackOutput.sync does: adds, then the order, then params. */
   function apply(next, when) {
     var old = {};
     state.chain.forEach(function (s) { old[s.id] = s; });
-    var oldIds = state.chain.map(function (s) { return uids[s.id]; }).join();
+    var oldIds = playOrder().join();
     next.chain.forEach(function (s) {
       var was = old[s.id];
-      if (!was || was.type !== s.type) { delete uids[s.id]; postSlot(s, when); return; } // a new effect: a fresh uid
+      if (!live(s)) { delete uids[s.id]; return; } // a missing plugin: not in the worklet
+      if (!was || was.type !== s.type || !uids[s.id]) { delete uids[s.id]; delete errors[s.id]; postSlot(s, when); return; } // a new effect: a fresh uid
       var p0 = {};
       slotProgram(was).forEach(function (p) { p0[p[0]] = p[1]; });
       slotProgram(s).forEach(function (p) { if (p0[p[0]] !== p[1]) H.post({ t: 'ps', uid: uids[s.id], k: p[0], v: p[1], when: when }); });
@@ -362,9 +379,20 @@ function createSlotCore(ctx, o) {
     var keep = {};
     next.chain.forEach(function (s) { keep[s.id] = true; });
     Object.keys(uids).forEach(function (id) { if (!keep[id]) delete uids[id]; });
+    Object.keys(errors).forEach(function (id) { if (!keep[id]) delete errors[id]; });
     state = next;
-    if (state.chain.map(function (s) { return uids[s.id]; }).join() !== oldIds) postOrder(when);
+    if (playOrder().join() !== oldIds) postOrder(when);
   }
+  // A plugin registered after this chain was made (or loaded): its missing slots join the chain, click-free.
+  var unPlug = onPluginEntry(function (type) {
+    if (H.disposed || !state.chain.some(function (s) { return s.type === type; })) return;
+    var next = JSON.parse(JSON.stringify(state));
+    next.chain = next.chain.map(function (s) { return s.type === type ? sanitizeSlots({ v: 2, chain: [s] }, 1).chain[0] : s; });
+    apply(next, 0);
+    H.emit({ effect: null, key: 'plugin', value: type });
+  });
+  var disposeHost = core.dispose;
+  core.dispose = function () { unPlug(); disposeHost(); };
 
   core.slots = N;
   /** A level meter (fxMeter) for one effect's input and output (`ref`: its id), or the whole chain's (omitted). */
@@ -381,6 +409,12 @@ function createSlotCore(ctx, o) {
     var slot = find(ref);
     if (!slot || H.disposed || H.tooFar(at)) return undefined;
     var e = catalogEntry(slot.type), v, d = null;
+    if (!e) { // a missing plugin: its On/Off is kept for when it loads; its dials stay as saved
+      if (key !== 'bypass') return undefined;
+      slot.bypass = !!value;
+      H.emit({ effect: slot.id, key: key, value: slot.bypass });
+      return slot.bypass;
+    }
     if (key === 'bypass') v = !!value;
     else {
       for (var i = 0; i < e.dials.length; i++) if (e.dials[i].key === key) d = e.dials[i];
@@ -394,7 +428,7 @@ function createSlotCore(ctx, o) {
     // A dial whose step depends on this one (drive_db: 0.1 dB in Acid, whole dB in Smooth) is re-rounded too.
     e.dials.forEach(function (dd) { if (dd.stepWhen) slot.dials[dd.key] = clampDial(dd, slot.dials[dd.key], dialStep(dd, slot.dials)); });
     var when = H.whenOf(at), uid = uids[slot.id];
-    slotProgram(slot).forEach(function (p) { if (p0[p[0]] !== p[1] || (d && p[0] === d.k)) H.post({ t: 'ps', uid: uid, k: p[0], v: p[1], when: when }); });
+    if (uid) slotProgram(slot).forEach(function (p) { if (p0[p[0]] !== p[1] || (d && p[0] === d.k)) H.post({ t: 'ps', uid: uid, k: p[0], v: p[1], when: when }); });
     H.emit({ effect: slot.id, key: key, value: v });
     Object.keys(stepped).forEach(function (k) { if (k !== key && slot.dials[k] !== stepped[k]) H.emit({ effect: slot.id, key: k, value: slot.dials[k] }); });
     return v;
@@ -444,7 +478,18 @@ function createSlotCore(ctx, o) {
     return true;
   };
   /** The chain as [{id, type, name, bypass}], first to last. */
-  core.getChain = function () { return state.chain.map(function (s) { return { id: s.id, type: s.type, name: slotName(s), bypass: s.bypass }; }); };
+  core.getChain = function () {
+    return state.chain.map(function (s) {
+      var c = { id: s.id, type: s.type, name: slotName(s), bypass: s.bypass };
+      if (s.plugin) {
+        var code = errors[s.id] || 0, missing = !live(s) || code === 5;
+        c.plugin = { id: s.plugin.id, version: s.plugin.version, url: s.plugin.url, name: s.plugin.name,
+          status: missing ? 'missing' : code ? 'failed' : 'ready' };
+        if (code && !missing) c.plugin.error = PLUGIN_ERRORS[code] || PLUGIN_ERRORS[2];
+      }
+      return c;
+    });
+  };
   /** ASTRID's saved-hacks shape for this chain (settings.hacks), and what ASTRID can't hold. */
   core.toAstrid = function () { return toAstridHacks(state); };
   return core;
