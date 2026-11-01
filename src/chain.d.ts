@@ -10,6 +10,12 @@ export interface FxChainDsp {
   readonly latencySamples: number;
   readonly peak: Float32Array;
   takeGainReduction(): number;
+  /** Level taps on or off (off costs nothing per sample). */
+  meter(on: boolean): void;
+  /** Peaks since the last call into out, then reset: [chain in, chain out, n, (uid, in, out) × n]; returns the floats written. */
+  takeMeter(out: Float32Array): number;
+  /** Floats takeMeter() may write (3 + 3 × boxes). */
+  readonly meterSize: number;
   /** An effect instance (catalog type), off at its defaults; then set() its params (snap) and order() it in. */
   add(uid: number, type: string | number, frame?: number): boolean;
   /** The order to play; immediate = no fade (a load). Otherwise ASTRID's 4 ms chain fade. */

@@ -7,6 +7,8 @@ import { createFxDsp } from './dsp.js'; // @strip
 import { createFxChainDsp } from './chain.js'; // @strip
 
 var NC_FX_PROCESSOR = 'nc-fx@1';
+/** How often the level taps report (seconds): about 30 a second, the kit's meter frame rate. */
+var METER_S = 1 / 30;
 
 class NcFxProcessor extends AudioWorkletProcessor {
   constructor(options) {
@@ -20,6 +22,14 @@ class NcFxProcessor extends AudioWorkletProcessor {
     if (this.slots) { if (po.chain) this.sync(po.chain, po.order || [], 0); }
     else if (po.program) this.dsp.load(po.program, 0, true);
     this.alive = true;
+    // Level taps (a host meter is open): every METER_S the peaks go out as one small message, { t: 'lv', d }, the same
+    // buffer each time (postMessage copies it). Silence goes out once, then nothing until there is sound again.
+    this.mOn = false;
+    this.mN = 0;
+    this.mEvery = Math.max(128, Math.round(sampleRate * METER_S));
+    this.mBuf = new Float32Array(this.dsp.meterSize);
+    this.mMsg = { t: 'lv', d: this.mBuf };
+    this.mQuiet = false;
     // Calls made on the main thread before this node existed, in call order. A time at or before the
     // current frame is clamped to now (and snaps); a future time is applied exactly. Equal frames keep
     // their order in the engine's queue. Runs once, in the constructor, before the first process().
@@ -41,6 +51,13 @@ class NcFxProcessor extends AudioWorkletProcessor {
   onMessage(m) {
     if (!m || typeof m !== 'object') return;
     var frame = typeof m.when === 'number' && m.when > 0 ? Math.round(m.when * sampleRate) : 0;
+    if (m.t === 'meter') {
+      this.mOn = m.on === true;
+      this.mN = 0;
+      this.mQuiet = false;
+      this.dsp.meter(this.mOn);
+      return;
+    }
     if (m.t === 'dispose') { this.alive = false; this.port.onmessage = null; return; }
     this.dispatch(m, frame, !!m.snap);
   }
@@ -83,6 +100,16 @@ class NcFxProcessor extends AudioWorkletProcessor {
     var mi = inputs.length > 1 ? inputs[1] : null;
     var mod = mi && mi.length > 0 ? mi[0] : null;
     this.dsp.process(inL, inR, out[0], out.length > 1 ? out[1] : null, out[0].length, currentFrame, mod);
+    if (this.mOn) {
+      this.mN += out[0].length;
+      if (this.mN >= this.mEvery) {
+        this.mN = 0;
+        var n = this.dsp.takeMeter(this.mBuf), loud = false;
+        for (var j = 0; j < n; j++) if ((j < 2 || (j > 2 && (j - 3) % 3 !== 0)) && this.mBuf[j] > 1e-5) { loud = true; break; }
+        if (loud || !this.mQuiet) this.port.postMessage(this.mMsg);
+        this.mQuiet = !loud;
+      }
+    }
     return true;
   }
 }

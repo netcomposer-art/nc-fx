@@ -26,6 +26,11 @@ export interface FxDsp {
   /** Post-chain peaks [L, R] of the last process() call. */
   readonly peak: Float32Array;
   takeGainReduction(): number;
+  /** Level taps on or off (off costs nothing). */
+  meter(on: boolean): void;
+  /** Peaks since the last call into out, then reset: [chain in, chain out, 0]; returns 3. */
+  takeMeter(out: Float32Array): number;
+  readonly meterSize: 3;
   /**
    * DSP units (see params.compile / dialToDsp). snap = no smoothing. Allocation-free.
    * Returns false (and does nothing) when frame is more than 600 s ahead: a time on the wrong clock.
