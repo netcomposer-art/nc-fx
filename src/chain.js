@@ -14,7 +14,7 @@
 // snap = immediate, as ncChainSet's), a param (ncChainPatch), tempo, clear (ncChainClear).
 
 import { createFxEnv, createUnit, UNIT_TYPES, CLEAR_CHUNK, PI, OP_CLEAR, OP_FADE_BEGIN, OP_FADE_WORK, OP_FADE_DONE, OP_FADE_IDLE, OP_SLEEP, OP_BLOCK, OP_MOD_ON, OP_GRID_ON, OP_GRID, OP_SETTLE, OP_RESET } from './units.js'; // @strip
-import { createLimiter, createQueue, fadeStep, EV_TEMPO, EV_CLEAR, HORIZON_S, MOD_GRID, QUEUE_SIZE, QUEUE_EMPTY } from './dsp.js'; // @strip
+import { createLimiter, createQueue, fadeStep, meterInput, EV_TEMPO, EV_CLEAR, HORIZON_S, MOD_GRID, QUEUE_SIZE, QUEUE_EMPTY } from './dsp.js'; // @strip
 
 var EV_ADD = -1000;   // EV_ADD - b: box b goes live
 var EV_ORDER = -2000; // EV_ORDER - l: order list l
@@ -38,6 +38,10 @@ export function createFxChainDsp(sampleRate, opts) {
   var horizon = Math.round(HORIZON_S * sr);
   T[1] = o.startFrame > 0 ? Math.round(o.startFrame) : 0;
   var peak = new Float32Array(2);
+  // Level taps (Peter, 2026-11-01: "a small visual indicator ... that shows the amount of signal being 'seen' in
+  // the insert"): off until a host meter opens (MT[0] = 1); then each box's input and output sample peak since the
+  // last takeMeter(), and the chain's own input and output. Off, the render below is the same code as without them.
+  var MT = new Int32Array(1), MIN = new Float32Array(NB), MOUT = new Float32Array(NB), MC = new Float32Array(2);
   var lim = createLimiter(E, limMode);
   lim.LM[4] = preGain;
   var QUEUE = QUEUE_SIZE, NO_EVENT = QUEUE_EMPTY;
@@ -214,8 +218,23 @@ export function createFxChainDsp(sampleRate, opts) {
       if (xR !== xR || xR === Infinity || xR === -Infinity) xR = 0;
       IO[0] = xL; IO[1] = xR;
       if (fadeStep(FC)) for (var b = 0; b < NB; b++) if (STATE[b] === 2) CUR[b].ctl(OP_FADE_BEGIN, 0);
-      var n = ON[0];
-      for (var m = 0; m < n; m++) CUR[ORD[m]].step(i);
+      var n = ON[0], m;
+      if (MT[0] === 0) for (m = 0; m < n; m++) CUR[ORD[m]].step(i);
+      else {
+        for (m = 0; m < n; m++) {
+          var mb = ORD[m], a = IO[0], c = IO[1];
+          if (a < 0) a = -a;
+          if (c < 0) c = -c;
+          if (c > a) a = c;
+          if (a > MIN[mb]) MIN[mb] = a;
+          CUR[mb].step(i);
+          a = IO[0]; c = IO[1];
+          if (a < 0) a = -a;
+          if (c < 0) c = -c;
+          if (c > a) a = c;
+          if (a > MOUT[mb]) MOUT[mb] = a;
+        }
+      }
       fade();
       lim.step();
       var yL = IO[0], yR = IO[1];
@@ -243,6 +262,22 @@ export function createFxChainDsp(sampleRate, opts) {
     latencySamples: limMode === 1 ? lim.la : 0,
     peak: peak,
     takeGainReduction: function () { var lo = lim.LM[2]; lim.LM[2] = 1; return lo; },
+    /** Level taps on (true) or off. Off costs nothing per sample. */
+    meter: function (on) { MT[0] = on ? 1 : 0; MIN.fill(0); MOUT.fill(0); MC[0] = 0; MC[1] = 0; },
+    /**
+     * The peaks since the last call (sample peak, the louder of L and R; 1 = full scale), into `out`, then reset:
+     * out[0] the chain's input, out[1] its output, out[2] n, then per effect playing (first to last) its uid, input
+     * and output. Returns the floats written (3 + 3n). `out` needs 3 + 3 * (2 * slots + 2) floats. Allocates nothing.
+     */
+    takeMeter: function (out) {
+      var n = ON[0], at = 3;
+      out[0] = MC[0]; out[1] = MC[1]; out[2] = n;
+      for (var m = 0; m < n; m++) { var b = ORD[m]; out[at] = UID[b]; out[at + 1] = MIN[b]; out[at + 2] = MOUT[b]; at += 3; }
+      MIN.fill(0); MOUT.fill(0); MC[0] = 0; MC[1] = 0;
+      return at;
+    },
+    /** Floats takeMeter() may write. */
+    meterSize: 3 + 3 * NB,
     /**
      * Add an effect instance (uid > 0, never reused; type a UNIT_TYPES name or code) at a frame. It starts at the
      * unit's defaults, off; set its params (snap) at the same frame, then order() it in. Allocates the first time a
@@ -298,6 +333,7 @@ export function createFxChainDsp(sampleRate, opts) {
         u.set(-1, false); u.retarget(-1); // keep them optimised (see createFxDsp's due())
       }
       T[2] = 0; T[3] = 0;
+      if (MT[0] === 1) meterInput(inL, inR, frames, MC);
       admit();
       var i = 0;
       while (i < frames) {
@@ -321,6 +357,7 @@ export function createFxChainDsp(sampleRate, opts) {
       }
       T[1] = start + frames;
       peak[0] = T[2]; peak[1] = T[3];
+      if (MT[0] === 1) { if (T[2] > MC[1]) MC[1] = T[2]; if (T[3] > MC[1]) MC[1] = T[3]; }
       for (b = 0; b < NB; b++) if (STATE[b] !== 0) { CUR[b].ctl(OP_SETTLE, 0); CUR[b].ctl(OP_SLEEP, 0); }
       fadeClearSome();
     }

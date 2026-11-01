@@ -108,6 +108,14 @@ export function createQueue(nIdx, start) {
   if (start) Q.LV.set(start);
   return Q;
 }
+/** The louder sample peak of a block's input (inR null = mono) into M[0], if louder. NaN and Infinity count as 0. */
+export function meterInput(inL, inR, frames, M) {
+  if (!inL) return;
+  var p = M[0], i, a;
+  for (i = 0; i < frames; i++) { a = inL[i]; if (a < 0) a = -a; if (a > p && a !== Infinity) p = a; }
+  if (inR && inR !== inL) for (i = 0; i < frames; i++) { a = inR[i]; if (a < 0) a = -a; if (a > p && a !== Infinity) p = a; }
+  M[0] = p;
+}
 export var QUEUE_SIZE = QUEUE;
 export var QUEUE_EMPTY = NO_EVENT;
 
@@ -134,6 +142,8 @@ export function createFxDsp(sampleRate, opts) {
   var horizon = Math.round(HORIZON_S * sr);
   T[1] = o.startFrame > 0 ? Math.round(o.startFrame) : 0; // a worklet passes currentFrame (for the horizon)
   var peak = new Float32Array(2);
+  // Level taps (see chain.js): the chain's input and output peaks while a host meter is open (MT[0] = 1).
+  var MT = new Int32Array(1), MC = new Float32Array(2);
   var MB = createModBus(); // mod bus (src/mod.js): routes and the per-block on flag
   // Each parameter's starting value; PRM = last applied (targets).
   var START = [0, 0, 0, 1, 0, 0.75, 0.35, 0, 0, 0, 0.5, 0.5, 0, 0, 0, 100 / 99, 0, 0, 100 / 99, 0, 0, 1, 0, 0];
@@ -275,6 +285,11 @@ export function createFxDsp(sampleRate, opts) {
     peak: peak,
     /** Lowest limiter gain since the last read of `takeGainReduction()`. */
     takeGainReduction: function () { var lo = lim.LM[2]; lim.LM[2] = 1; return lo; },
+    /** Level taps on (true) or off. Off costs nothing. */
+    meter: function (on) { MT[0] = on ? 1 : 0; MC[0] = 0; MC[1] = 0; },
+    /** As the slot chain's: out[0] input peak, out[1] output peak, out[2] 0 (no per-effect taps here); returns 3. */
+    takeMeter: function (out) { out[0] = MC[0]; out[1] = MC[1]; out[2] = 0; MC[0] = 0; MC[1] = 0; return 3; },
+    meterSize: 3,
     /**
      * Set one parameter (DSP units, FX_PARAM index) at an absolute frame (omitted/past = now). snap = no smoothing.
      * Returns false when the frame is more than 600 s ahead (refused: a time on the wrong clock).
@@ -308,6 +323,7 @@ export function createFxDsp(sampleRate, opts) {
       E.mod = mon === 1 ? mod : drive.ctl(OP_MOD_ON, 0) === 1 || delay.ctl(OP_MOD_ON, 0) === 1 ? zeroCv(frames) : null;
       drive.ctl(OP_BLOCK, 0); delay.ctl(OP_BLOCK, 0);
       T[2] = 0; T[3] = 0;
+      if (MT[0] === 1) meterInput(inL, inR, frames, MC);
       admit(); // keeps admit() hot (optimised) even when events are rare; the slot is normally empty
       drive.set(-1, false); delay.set(-1, false); plate.set(-1, false); delay.retarget(-1); // keep them hot (see due)
       var i = 0;
@@ -333,6 +349,7 @@ export function createFxDsp(sampleRate, opts) {
       }
       T[1] = start + frames;
       peak[0] = T[2]; peak[1] = T[3];
+      if (MT[0] === 1) { if (T[2] > MC[1]) MC[1] = T[2]; if (T[3] > MC[1]) MC[1] = T[3]; }
       drive.ctl(OP_SETTLE, 0); delay.ctl(OP_SETTLE, 0); plate.ctl(OP_SETTLE, 0);
       delay.ctl(OP_SLEEP, 0); plate.ctl(OP_SLEEP, 0);
       fadeClearSome();

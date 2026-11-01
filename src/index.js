@@ -76,14 +76,17 @@ function createHost(ctx, o, start, fold) {
   input.connect(dry);
   dry.connect(output);
   wet.connect(output);
-  var H = { node: null, status: 'loading', error: null, disposed: false, listeners: [], bpm: bpm };
+  var H = { node: null, status: 'loading', error: null, disposed: false, listeners: [], bpm: bpm, mUsers: 0, lv: null, lvAt: 0 };
   var startOpts = start(bpm);
 
   H.post = function (msg) {
     if (H.node) H.node.port.postMessage(msg);
     else if (!H.disposed) {
       // Capped: past PENDING_MAX the queue folds into one load of the current state plus the tempo (now).
-      if (pending.length >= PENDING_MAX) pending = fold().concat([{ t: 'tempo', bpm: H.bpm, when: 0 }]);
+      if (pending.length >= PENDING_MAX) {
+        pending = fold().concat([{ t: 'tempo', bpm: H.bpm, when: 0 }]);
+        if (H.mUsers > 0) pending.push({ t: 'meter', on: true });
+      }
       pending.push(msg);
     }
   };
@@ -125,6 +128,11 @@ function createHost(ctx, o, start, fold) {
       channelCount: 2, channelCountMode: 'explicit', channelInterpretation: 'speakers',
       processorOptions: po
     });
+    // The worklet speaks only while a level meter is open (see meterOpen): its latest peaks.
+    H.node.port.onmessage = function (e) {
+      var m = e.data;
+      if (m && m.t === 'lv' && H.mUsers > 0) { H.lv = m.d; H.lvAt = nowMs(); }
+    };
     input.connect(H.node);
     if (modInput) modInput.connect(H.node, 0, 1);
     H.node.connect(wet);
@@ -141,6 +149,37 @@ function createHost(ctx, o, start, fold) {
     pending = [];
     H.error = e;
   });
+
+  /** Level taps: the worklet measures only while at least one meter is open (ref-counted over every handle). */
+  H.meterOpen = function () {
+    if (H.disposed || H.status === 'unavailable') return false;
+    if (H.mUsers++ === 0) H.post({ t: 'meter', on: true });
+    return true;
+  };
+  H.meterClose = function () {
+    if (H.mUsers === 0) return;
+    if (--H.mUsers === 0) { H.lv = null; if (!H.disposed) H.post({ t: 'meter', on: false }); }
+  };
+  /** The latest peaks, or null when there are none or they are old (a suspended context sends nothing). */
+  H.levels = function () { return H.lv && nowMs() - H.lvAt < METER_STALE_MS ? H.lv : null; };
+  var handles = {};
+  /** One handle per ref: open() / close() (ref-counted), read() the peaks { in, out } (one reused object). */
+  H.meter = function (key, pick) {
+    if (handles[key]) return handles[key];
+    var open = 0, lv = { in: 0, out: 0 };
+    var h = {
+      open: function () { if (!H.meterOpen()) return false; open++; return true; },
+      close: function () { if (open === 0) return; open--; H.meterClose(); },
+      read: function () {
+        var d = open > 0 ? H.levels() : null;
+        lv.in = 0; lv.out = 0;
+        if (d) pick(d, lv);
+        return lv;
+      }
+    };
+    handles[key] = h;
+    return h;
+  };
 
   H.core = {
     input: input,
@@ -192,6 +231,22 @@ function createHost(ctx, o, start, fold) {
   return H;
 }
 
+/** Peaks older than this read as silence (the worklet reports about 30 times a second while metering). */
+var METER_STALE_MS = 250;
+function nowMs() { return typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now(); }
+/** The chain's own input and output peaks (takeMeter's first two floats). */
+function chainLevels(d, lv) { lv.in = d[0]; lv.out = d[1]; }
+
+/**
+ * A level meter for an nc-fx chain (`fx.meter(ref)`), or null for anything else: `open()` while it is on screen,
+ * `close()` after, `read()` the peaks since the worklet's last report, { in, out } (sample peaks, 1 = full scale).
+ * With a slot chain, `ref` is an effect id ('drive-1') and the peaks are that effect's input and output; omitted,
+ * the whole chain's. The worklet measures nothing until a meter is open.
+ */
+export function fxMeter(fx, ref) {
+  return fx && typeof fx.meter === 'function' ? fx.meter(ref) : null;
+}
+
 /**
  * The chain as Web Audio nodes: input -> effects -> pre-gain -> limiter -> output.
  * Without `slots`: the fixed chain, drive -> delay -> reverb. With `slots` (true = 3, or 1-8): ASTRID's chain model.
@@ -240,6 +295,8 @@ export function createFxCore(ctx, opts) {
     });
     return v;
   };
+  /** The chain's level meter (fxMeter): input and output of the whole chain (there is one of each effect, in order). */
+  core.meter = function () { return H.meter('', chainLevels); };
   core.getParam = function (effect, key) {
     var type = effectType(effect);
     if (!type) return undefined;
@@ -310,6 +367,15 @@ function createSlotCore(ctx, o) {
   }
 
   core.slots = N;
+  /** A level meter (fxMeter) for one effect's input and output (`ref`: its id), or the whole chain's (omitted). */
+  core.meter = function (ref) {
+    if (ref === undefined || ref === null || ref === '') return H.meter('', chainLevels);
+    return H.meter('#' + ref, function (d, lv) {
+      var slot = find(ref), uid = slot ? uids[slot.id] : 0, n = d[2];
+      if (!uid) return;
+      for (var at = 3, m = 0; m < n; m++, at += 3) if (d[at] === uid) { lv.in = d[at + 1]; lv.out = d[at + 2]; return; }
+    });
+  };
   /** Set one dial (UI units) or 'bypass' of the effect `ref` (an id, or a type for its first instance). */
   core.setParam = function (ref, key, value, at) {
     var slot = find(ref);

@@ -75,8 +75,20 @@ export interface FxCore {
   /** Drop the delay and reverb tails. fadeMs > 0 (max 1000) fades the wet out and back in. Not the limiter. */
   clear(at?: number | { at?: number; fadeMs?: number }): void;
   onChange(cb: (change: FxChange) => void): () => void;
+  /** The whole chain's level meter: its input and output peaks (see fxMeter). */
+  meter(ref?: string): FxMeter;
   dispose(): void;
 }
+/** Sample peaks since the worklet's last report (about 30 a second): the louder of L and R, 1 = full scale. */
+export interface FxLevels { in: number; out: number }
+/**
+ * A level tap (fxMeter). open() while it is on screen (false: the chain can't meter, e.g. disposed), close() after;
+ * opens are counted over every meter of the chain, and the worklet measures nothing while none is open. read()
+ * gives the latest peaks (one reused object; zeros while closed, silent or stale).
+ */
+export interface FxMeter { open(): boolean; close(): void; read(): FxLevels }
+/** A chain's level meter: with a slot chain, `ref` is an effect id and the peaks are its input and output; omitted, the chain's. Null for anything that isn't an nc-fx chain. */
+export function fxMeter(fx: { meter?(ref?: string): FxMeter } | null | undefined, ref?: string): FxMeter | null;
 /** createFxCore(ctx, { slots }): ASTRID's chain model. `ref` is an effect id ('delay-1'), or a type for its first instance. */
 export interface FxSlotCore extends Omit<FxCore, 'setParam' | 'getParam' | 'getState'> {
   readonly slots: number;
@@ -88,6 +100,8 @@ export interface FxSlotCore extends Omit<FxCore, 'setParam' | 'getParam' | 'getS
   removeEffect(ref: string, opts?: { at?: number }): boolean;
   moveEffect(ref: string, to: number, opts?: { at?: number }): boolean;
   getChain(): Array<{ id: string; type: FxType; name: string; bypass: boolean }>;
+  /** One effect's level meter (`ref` its id: its input and output peaks), or the whole chain's (omitted). */
+  meter(ref?: string): FxMeter;
   /** ASTRID's saved-hacks shape (settings.hacks) for this chain, and what ASTRID can't hold. */
   toAstrid(): { hacks: AstridHackSlot[]; lossy: string[] };
 }

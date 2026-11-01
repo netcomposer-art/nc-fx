@@ -1440,6 +1440,14 @@ function createQueue(nIdx, start) {
   if (start) Q.LV.set(start);
   return Q;
 }
+/** The louder sample peak of a block's input (inR null = mono) into M[0], if louder. NaN and Infinity count as 0. */
+function meterInput(inL, inR, frames, M) {
+  if (!inL) return;
+  var p = M[0], i, a;
+  for (i = 0; i < frames; i++) { a = inL[i]; if (a < 0) a = -a; if (a > p && a !== Infinity) p = a; }
+  if (inR && inR !== inL) for (i = 0; i < frames; i++) { a = inR[i]; if (a < 0) a = -a; if (a > p && a !== Infinity) p = a; }
+  M[0] = p;
+}
 var QUEUE_SIZE = QUEUE;
 var QUEUE_EMPTY = NO_EVENT;
 
@@ -1466,6 +1474,8 @@ function createFxDsp(sampleRate, opts) {
   var horizon = Math.round(HORIZON_S * sr);
   T[1] = o.startFrame > 0 ? Math.round(o.startFrame) : 0; // a worklet passes currentFrame (for the horizon)
   var peak = new Float32Array(2);
+  // Level taps (see chain.js): the chain's input and output peaks while a host meter is open (MT[0] = 1).
+  var MT = new Int32Array(1), MC = new Float32Array(2);
   var MB = createModBus(); // mod bus (src/mod.js): routes and the per-block on flag
   // Each parameter's starting value; PRM = last applied (targets).
   var START = [0, 0, 0, 1, 0, 0.75, 0.35, 0, 0, 0, 0.5, 0.5, 0, 0, 0, 100 / 99, 0, 0, 100 / 99, 0, 0, 1, 0, 0];
@@ -1607,6 +1617,11 @@ function createFxDsp(sampleRate, opts) {
     peak: peak,
     /** Lowest limiter gain since the last read of `takeGainReduction()`. */
     takeGainReduction: function () { var lo = lim.LM[2]; lim.LM[2] = 1; return lo; },
+    /** Level taps on (true) or off. Off costs nothing. */
+    meter: function (on) { MT[0] = on ? 1 : 0; MC[0] = 0; MC[1] = 0; },
+    /** As the slot chain's: out[0] input peak, out[1] output peak, out[2] 0 (no per-effect taps here); returns 3. */
+    takeMeter: function (out) { out[0] = MC[0]; out[1] = MC[1]; out[2] = 0; MC[0] = 0; MC[1] = 0; return 3; },
+    meterSize: 3,
     /**
      * Set one parameter (DSP units, FX_PARAM index) at an absolute frame (omitted/past = now). snap = no smoothing.
      * Returns false when the frame is more than 600 s ahead (refused: a time on the wrong clock).
@@ -1640,6 +1655,7 @@ function createFxDsp(sampleRate, opts) {
       E.mod = mon === 1 ? mod : drive.ctl(OP_MOD_ON, 0) === 1 || delay.ctl(OP_MOD_ON, 0) === 1 ? zeroCv(frames) : null;
       drive.ctl(OP_BLOCK, 0); delay.ctl(OP_BLOCK, 0);
       T[2] = 0; T[3] = 0;
+      if (MT[0] === 1) meterInput(inL, inR, frames, MC);
       admit(); // keeps admit() hot (optimised) even when events are rare; the slot is normally empty
       drive.set(-1, false); delay.set(-1, false); plate.set(-1, false); delay.retarget(-1); // keep them hot (see due)
       var i = 0;
@@ -1665,6 +1681,7 @@ function createFxDsp(sampleRate, opts) {
       }
       T[1] = start + frames;
       peak[0] = T[2]; peak[1] = T[3];
+      if (MT[0] === 1) { if (T[2] > MC[1]) MC[1] = T[2]; if (T[3] > MC[1]) MC[1] = T[3]; }
       drive.ctl(OP_SETTLE, 0); delay.ctl(OP_SETTLE, 0); plate.ctl(OP_SETTLE, 0);
       delay.ctl(OP_SLEEP, 0); plate.ctl(OP_SLEEP, 0);
       fadeClearSome();
@@ -1711,6 +1728,10 @@ function createFxChainDsp(sampleRate, opts) {
   var horizon = Math.round(HORIZON_S * sr);
   T[1] = o.startFrame > 0 ? Math.round(o.startFrame) : 0;
   var peak = new Float32Array(2);
+  // Level taps (Peter, 2026-11-01: "a small visual indicator ... that shows the amount of signal being 'seen' in
+  // the insert"): off until a host meter opens (MT[0] = 1); then each box's input and output sample peak since the
+  // last takeMeter(), and the chain's own input and output. Off, the render below is the same code as without them.
+  var MT = new Int32Array(1), MIN = new Float32Array(NB), MOUT = new Float32Array(NB), MC = new Float32Array(2);
   var lim = createLimiter(E, limMode);
   lim.LM[4] = preGain;
   var QUEUE = QUEUE_SIZE, NO_EVENT = QUEUE_EMPTY;
@@ -1887,8 +1908,23 @@ function createFxChainDsp(sampleRate, opts) {
       if (xR !== xR || xR === Infinity || xR === -Infinity) xR = 0;
       IO[0] = xL; IO[1] = xR;
       if (fadeStep(FC)) for (var b = 0; b < NB; b++) if (STATE[b] === 2) CUR[b].ctl(OP_FADE_BEGIN, 0);
-      var n = ON[0];
-      for (var m = 0; m < n; m++) CUR[ORD[m]].step(i);
+      var n = ON[0], m;
+      if (MT[0] === 0) for (m = 0; m < n; m++) CUR[ORD[m]].step(i);
+      else {
+        for (m = 0; m < n; m++) {
+          var mb = ORD[m], a = IO[0], c = IO[1];
+          if (a < 0) a = -a;
+          if (c < 0) c = -c;
+          if (c > a) a = c;
+          if (a > MIN[mb]) MIN[mb] = a;
+          CUR[mb].step(i);
+          a = IO[0]; c = IO[1];
+          if (a < 0) a = -a;
+          if (c < 0) c = -c;
+          if (c > a) a = c;
+          if (a > MOUT[mb]) MOUT[mb] = a;
+        }
+      }
       fade();
       lim.step();
       var yL = IO[0], yR = IO[1];
@@ -1916,6 +1952,22 @@ function createFxChainDsp(sampleRate, opts) {
     latencySamples: limMode === 1 ? lim.la : 0,
     peak: peak,
     takeGainReduction: function () { var lo = lim.LM[2]; lim.LM[2] = 1; return lo; },
+    /** Level taps on (true) or off. Off costs nothing per sample. */
+    meter: function (on) { MT[0] = on ? 1 : 0; MIN.fill(0); MOUT.fill(0); MC[0] = 0; MC[1] = 0; },
+    /**
+     * The peaks since the last call (sample peak, the louder of L and R; 1 = full scale), into `out`, then reset:
+     * out[0] the chain's input, out[1] its output, out[2] n, then per effect playing (first to last) its uid, input
+     * and output. Returns the floats written (3 + 3n). `out` needs 3 + 3 * (2 * slots + 2) floats. Allocates nothing.
+     */
+    takeMeter: function (out) {
+      var n = ON[0], at = 3;
+      out[0] = MC[0]; out[1] = MC[1]; out[2] = n;
+      for (var m = 0; m < n; m++) { var b = ORD[m]; out[at] = UID[b]; out[at + 1] = MIN[b]; out[at + 2] = MOUT[b]; at += 3; }
+      MIN.fill(0); MOUT.fill(0); MC[0] = 0; MC[1] = 0;
+      return at;
+    },
+    /** Floats takeMeter() may write. */
+    meterSize: 3 + 3 * NB,
     /**
      * Add an effect instance (uid > 0, never reused; type a UNIT_TYPES name or code) at a frame. It starts at the
      * unit's defaults, off; set its params (snap) at the same frame, then order() it in. Allocates the first time a
@@ -1971,6 +2023,7 @@ function createFxChainDsp(sampleRate, opts) {
         u.set(-1, false); u.retarget(-1); // keep them optimised (see createFxDsp's due())
       }
       T[2] = 0; T[3] = 0;
+      if (MT[0] === 1) meterInput(inL, inR, frames, MC);
       admit();
       var i = 0;
       while (i < frames) {
@@ -1994,6 +2047,7 @@ function createFxChainDsp(sampleRate, opts) {
       }
       T[1] = start + frames;
       peak[0] = T[2]; peak[1] = T[3];
+      if (MT[0] === 1) { if (T[2] > MC[1]) MC[1] = T[2]; if (T[3] > MC[1]) MC[1] = T[3]; }
       for (b = 0; b < NB; b++) if (STATE[b] !== 0) { CUR[b].ctl(OP_SETTLE, 0); CUR[b].ctl(OP_SLEEP, 0); }
       fadeClearSome();
     }
@@ -2008,6 +2062,8 @@ function createFxChainDsp(sampleRate, opts) {
 // nc-fx was created by Peter Semmelhack (https://psem.me/). MIT License.
 
 var NC_FX_PROCESSOR = 'nc-fx@1';
+/** How often the level taps report (seconds): about 30 a second, the kit's meter frame rate. */
+var METER_S = 1 / 30;
 
 class NcFxProcessor extends AudioWorkletProcessor {
   constructor(options) {
@@ -2021,6 +2077,14 @@ class NcFxProcessor extends AudioWorkletProcessor {
     if (this.slots) { if (po.chain) this.sync(po.chain, po.order || [], 0); }
     else if (po.program) this.dsp.load(po.program, 0, true);
     this.alive = true;
+    // Level taps (a host meter is open): every METER_S the peaks go out as one small message, { t: 'lv', d }, the same
+    // buffer each time (postMessage copies it). Silence goes out once, then nothing until there is sound again.
+    this.mOn = false;
+    this.mN = 0;
+    this.mEvery = Math.max(128, Math.round(sampleRate * METER_S));
+    this.mBuf = new Float32Array(this.dsp.meterSize);
+    this.mMsg = { t: 'lv', d: this.mBuf };
+    this.mQuiet = false;
     // Calls made on the main thread before this node existed, in call order. A time at or before the
     // current frame is clamped to now (and snaps); a future time is applied exactly. Equal frames keep
     // their order in the engine's queue. Runs once, in the constructor, before the first process().
@@ -2042,6 +2106,13 @@ class NcFxProcessor extends AudioWorkletProcessor {
   onMessage(m) {
     if (!m || typeof m !== 'object') return;
     var frame = typeof m.when === 'number' && m.when > 0 ? Math.round(m.when * sampleRate) : 0;
+    if (m.t === 'meter') {
+      this.mOn = m.on === true;
+      this.mN = 0;
+      this.mQuiet = false;
+      this.dsp.meter(this.mOn);
+      return;
+    }
     if (m.t === 'dispose') { this.alive = false; this.port.onmessage = null; return; }
     this.dispatch(m, frame, !!m.snap);
   }
@@ -2084,6 +2155,16 @@ class NcFxProcessor extends AudioWorkletProcessor {
     var mi = inputs.length > 1 ? inputs[1] : null;
     var mod = mi && mi.length > 0 ? mi[0] : null;
     this.dsp.process(inL, inR, out[0], out.length > 1 ? out[1] : null, out[0].length, currentFrame, mod);
+    if (this.mOn) {
+      this.mN += out[0].length;
+      if (this.mN >= this.mEvery) {
+        this.mN = 0;
+        var n = this.dsp.takeMeter(this.mBuf), loud = false;
+        for (var j = 0; j < n; j++) if ((j < 2 || (j > 2 && (j - 3) % 3 !== 0)) && this.mBuf[j] > 1e-5) { loud = true; break; }
+        if (loud || !this.mQuiet) this.port.postMessage(this.mMsg);
+        this.mQuiet = !loud;
+      }
+    }
     return true;
   }
 }
