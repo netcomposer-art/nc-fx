@@ -9,8 +9,8 @@ my-plugin/
   tremolo.dsp.js   what it does: one plain script that runs on the audio thread
 ```
 
-The host draws everything else: the card, its On/Off, the level meter, fold, maximize, More, saving, presets and
-undo. You write no UI.
+The host draws everything else: the card, its On/Off, the level meter, fold, maximize, More, saving and Scenes.
+You write no UI.
 
 **Fastest start:** copy the template, [netcomposer-art/nc-plugin-template](https://github.com/netcomposer-art/nc-plugin-template)
 ("Use this template", or copy its `plugin/` folder). It holds a working tremolo and runs the checker in CI.
@@ -130,7 +130,7 @@ Types for an editor: [src/plugin-worklet.d.ts](../src/plugin-worklet.d.ts).
 - **Guard.** If `create()`, `set()`, `process()` or `reset()` throws, or `process()` writes NaN, infinity or a
   sample past ±64 (+36 dBFS), nc-fx stops calling the plugin, passes the slot's input through, and the card says so.
   The rest of the mix plays on. Adding it again gives it a fresh start.
-- **Meters, saving, presets, undo, missing plugins.** A session saves the plugin's id, URL, version and dials. If
+- **Meters, saving, Scenes, missing plugins.** A session saves the plugin's id, URL, version and dials. If
   the plugin can't be loaded, its slot shows as missing: a wire, its dials kept for later.
 
 ## 3. Check it
@@ -144,7 +144,7 @@ In the template, `npm run check`. In a clone of nc-fx, `node scripts/check-plugi
 
 ```
 PASS manifest           Tremolo 1.0.0 (netcomposer.tremolo) by Peter Semmelhack, MIT, 3 param(s)
-PASS dsp-file           tremolo.dsp.js, 2.6 KB, one plain script
+PASS dsp-file           tremolo.dsp.js, 2.7 KB, one plain script
 PASS register           registers netcomposer.tremolo@1.0.0 with params [rate, depth, shape]
 ...
 FAIL alloc              process() allocates: about 8810080 bytes per 2000 blocks (4405 per block)
