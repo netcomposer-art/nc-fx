@@ -84,7 +84,7 @@
     "build": "node scripts/build.mjs",
     "check:build": "node scripts/build.mjs --check",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "node --test --expose-gc test/*.test.mjs",
+    "test": "node --test --expose-gc test/*.test.mjs && node --test test/checker/*.test.mjs",
     "test:browser": "node test/browser/run.mjs",
     "size": "node scripts/size.mjs",
     "check-plugin": "node scripts/check-plugin.mjs"

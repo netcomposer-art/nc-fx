@@ -50,7 +50,7 @@ DSP contract, checker, loading it in the Studio). Start from
 
 Changing the plugin system itself: `src/plugin.js` (main thread: manifest, catalog entry, loader, registry),
 `src/plugin-host.js` (worklet: registry and the guard unit), `src/chain.js` (`renderPlug`), `schema/`,
-`scripts/check-plugin.mjs`. Tests: `test/plugin*.test.mjs`.
+`scripts/check-plugin.mjs`. Tests: `test/plugin*.test.mjs`, `test/checker/` (run after the main suite).
 
 ## Where to ask
 

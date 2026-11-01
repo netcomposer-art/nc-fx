@@ -1,3 +1,5 @@
+// Runs after the main suite (npm test), not beside it: each check spawns processes and an allocation gate, and the
+// main suite's heap-delta gates are sensitive to CPU contention.
 // nc-fx-check (scripts/check-plugin.mjs): the tremolo passes; each broken fixture fails on the check that names its
 // mistake, with a fix, a nonzero exit and JSON an agent can read.
 import { test } from 'node:test';
@@ -5,8 +7,8 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-const CHECK = fileURLToPath(new URL('../scripts/check-plugin.mjs', import.meta.url));
-const dir = (n) => fileURLToPath(new URL(`./fixtures/plugins/${n}`, import.meta.url));
+const CHECK = fileURLToPath(new URL('../../scripts/check-plugin.mjs', import.meta.url));
+const dir = (n) => fileURLToPath(new URL(`../fixtures/plugins/${n}`, import.meta.url));
 function check(name, ...extra) {
   const r = spawnSync(process.execPath, [CHECK, dir(name), '--json', '--no-browser', ...extra], { encoding: 'utf8', timeout: 180000 });
   return { code: r.status, out: JSON.parse(r.stdout) };
