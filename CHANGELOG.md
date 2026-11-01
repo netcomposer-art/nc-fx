@@ -31,6 +31,9 @@
   through the real worklet engine, and (with Playwright) a real AudioWorklet in Chromium. PASS / FAIL lines with a
   fix each; exit 1 on a failure.
 - CI runs the checker on the tremolo fixture, in Chromium too.
+- Tests: `test/alloc.test.mjs`'s GC-count gate counts only GCs that start while the engine renders (it also heard
+  the forced gc() before the window and the test runner after it, and failed on the CI runners on main too); the
+  checker's tests run after the main suite (`test/checker/`), not beside its gates.
 
 **EQ graph** (ui/eq-graph, Peter 2026-11-01: "a real-time visualizer ... that shows the frequency cuts and boosts"):
 

@@ -6,15 +6,23 @@ import { PerformanceObserver } from 'node:perf_hooks';
 import { readFileSync } from 'node:fs';
 import { createFxDsp, FX_PARAM as P } from '../src/dsp.js';
 
+// The GCs that started while fn() ran. Entries arrive asynchronously, so the observer also hears the forced gc()
+// just before it and anything the test runner collects during the 20 ms wait after; those aren't the engine's.
+// Counting every entry made this gate fail on the CI runners (Node 24, then 20) on main too, with no change to the
+// engine; the heap-delta gates below (fixed young generation, own process) were green in the same runs.
 async function gcsDuring(fn) {
   if (globalThis.gc) globalThis.gc();
-  let n = 0;
-  const obs = new PerformanceObserver((l) => { n += l.getEntries().length; });
+  const seen = [];
+  const obs = new PerformanceObserver((l) => { for (const e of l.getEntries()) seen.push(e.startTime); });
   obs.observe({ entryTypes: ['gc'] });
+  const t0 = performance.now();
   fn();
+  const t1 = performance.now();
   await new Promise((r) => setTimeout(r, 20));
   obs.disconnect();
-  return n;
+  const inside = seen.filter((t) => t >= t0 && t <= t1);
+  inside.outside = seen.length - inside.length;
+  return inside;
 }
 
 for (const [limiter, bypassMode, withMod] of [[undefined, undefined], ['lookahead', 'hold'], ['soft', 'run'], ['off', 'hold'], ['lookahead', 'run', true], ['lookahead', 'run', 'acid'], ['soft', 'run', 'delay']]) {
@@ -48,7 +56,7 @@ for (const [limiter, bypassMode, withMod] of [[undefined, undefined], ['lookahea
     if (globalThis.gc) globalThis.gc();
     run(6000); // warm up: let the optimiser settle
     const gcs = await gcsDuring(() => run(30000)); // 80 s of audio
-    assert.equal(gcs, 0, `${gcs} GCs while processing`);
+    assert.equal(gcs.length, 0, `${gcs.length} GCs while processing (at ${gcs.map((t) => t.toFixed(0)).join(', ')} ms; ${gcs.outside} outside the loop)`);
   });
 }
 
