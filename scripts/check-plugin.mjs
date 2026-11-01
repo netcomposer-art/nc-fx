@@ -470,7 +470,10 @@ if (!flag('--no-browser')) {
       if (r.error) report('browser', false, `in Chromium: ${r.error}`, 'open the Studio, load the plugin from a local server and read the console');
       else report('browser', true, `loaded with nc-fx's loader into a real AudioWorklet (Chromium ${r.version}): it plays (peak ${r.peak.toFixed(3)}), and bypassed it is the input bit for bit`);
     } catch (e) {
-      report('browser', false, `Chromium check could not run: ${String(e.message).split('\n')[0]}`, 'npx playwright install chromium');
+      const why = String(e.message).split('\n')[0];
+      // No browser binary (npm i playwright without `playwright install`): skipped unless --browser asked for it.
+      if (flag('--browser')) report('browser', false, `Chromium check could not run: ${why}`, 'npx playwright install chromium');
+      else report('browser', true, `skipped: Chromium could not start (${why}); npx playwright install chromium, or --browser to require it`, undefined, undefined, 'skip');
     }
   }
 }
