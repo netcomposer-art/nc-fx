@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+**EQ graph** (ui/eq-graph, Peter 2026-11-01: "a real-time visualizer ... that shows the frequency cuts and boosts"):
+
+- `@netcomposer/nc-fx/eq` (also from the index): `eqResponse(dials, sampleRate, freqs)` (the combined curve and each
+  band's own, in dB, from the engine's own RBJ coefficients; test/eq.test.mjs measures the slot engine's impulse
+  response against it within 0.1 dB), `eqBands`, `eqCoefficients`, `eqPatchDials` / `eqResetDials` (a graph drag
+  or key as dial values, rounded to their steps), `fxSpectrum(fx)` (one shared AnalyserNode on a chain's output,
+  connected only while a graph has it open) and `eqGraph(fx, ref, { id, set, help })`, the nc-ui kit's `eqGraph`
+  control as plain data. The audio path is unchanged.
+
 **ASTRID's whole Hacks catalog, movable slots, ASTRID's saves, kit FX cards** (fx/astrid-catalog):
 
 - **Every ASTRID hack.** EQ, compressor, width, flanger, chorus, phaser, and the hidden low-, high- and band-pass

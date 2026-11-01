@@ -34,3 +34,9 @@ void migrateSlots([]).dropped;
 void CATALOG.map((e) => e.dials.map((d) => formatDial(d, d.default, 120)));
 const chainDsp = createFxChainDsp(48000, { slots: 3, limiter: 'lookahead' });
 chainDsp.add(1, 'phaser'); chainDsp.order([1]);
+
+import { eqGraph, eqResponse } from '../../src/index.js';
+const slotsFx = createFxCore(ctx, { slots: true });
+const g = eqGraph(slotsFx, 'eq-1', { id: 'g', set: (k: string, v: number) => slotsFx.setParam('eq-1', k, v) });
+const r: { total: Float64Array; bands: Float64Array[] } = g.response(new Float64Array([100, 1000]));
+void r; void eqResponse({ low_db: 3 }, 48000, [1000]);

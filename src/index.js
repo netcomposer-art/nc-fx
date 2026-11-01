@@ -15,6 +15,7 @@ import {
 } from './params.js';
 import { CATALOG, CATALOG_MENU, catalogType, catalogEntry, catalogDial, formatDial, describeCatalog } from './catalog.js';
 import { SLOTS_VERSION, DEFAULT_SLOTS, migrateSlots, sanitizeSlots, newSlot, slotName, moveSlot, slotProgram, toAstridHacks, toAstridDocument } from './slots.js';
+export { EQ_LOW_HZ, EQ_HIGH_HZ, EQ_RANGE_DB, eqBands, eqResponse, eqCoefficients, eqGraph, eqPatchDials, eqResetDials, fxSpectrum } from './eq.js';
 
 export { EFFECTS, EFFECT_ORDER, STATE_VERSION, sanitize, migrate, defaultState, delaySeconds, compile, dialToDsp, describeParams, FORMATS };
 export { CATALOG, CATALOG_MENU, catalogEntry, catalogDial, formatDial, describeCatalog };

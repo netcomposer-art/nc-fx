@@ -8,6 +8,8 @@ export type { FxType, FxCatalogEntry, FxCatalogDial, FxFormat, FxLaw } from './c
 export { CATALOG, CATALOG_MENU, catalogEntry, catalogDial, formatDial, describeCatalog } from './catalog.js';
 export type { FxSlotState, FxSlotV2, AstridHackSlot } from './slots.js';
 export { SLOTS_VERSION, DEFAULT_SLOTS, migrateSlots, sanitizeSlots, newSlot, slotName, moveSlot, toAstridHacks, toAstridDocument } from './slots.js';
+export type { EqDials, EqBand, EqGraphSpec, EqGraphBandSpec, EqGraphOptions, FxSpectrum } from './eq.js';
+export { EQ_LOW_HZ, EQ_HIGH_HZ, EQ_RANGE_DB, eqBands, eqResponse, eqCoefficients, eqGraph, eqPatchDials, eqResetDials, fxSpectrum } from './eq.js';
 import type { FxSlotState, AstridHackSlot } from './slots.js';
 import type { FxType } from './catalog.js';
 
