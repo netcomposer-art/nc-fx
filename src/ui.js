@@ -194,7 +194,8 @@ export function mountFxPanel(el, opts) {
   function fieldOf(c, key) { for (var i = 0; i < c.fields.length; i++) if (c.fields[i].dial.key === key) return c.fields[i]; return null; }
 
   function makeCard(item, at, count) {
-    var e = catalogEntry(item.type);
+    // A plugin that isn't loaded on this page (docs/plugins.md) has no entry: a card with its name and no dials.
+    var e = catalogEntry(item.type) || { type: item.type, label: item.name, dials: [] };
     var card = doc.createElement('div');
     var cid = 'nc-fx-' + n + '-' + item.id;
     card.className = 'nc-ui-fx';

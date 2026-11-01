@@ -40,3 +40,10 @@ const slotsFx = createFxCore(ctx, { slots: true });
 const g = eqGraph(slotsFx, 'eq-1', { id: 'g', set: (k: string, v: number) => slotsFx.setParam('eq-1', k, v) });
 const r: { total: Float64Array; bands: Float64Array[] } = g.response(new Float64Array([100, 1000]));
 void r; void eqResponse({ low_db: 3 }, 48000, [1000]);
+// Plugins.
+import { loadPlugin, validateManifest, pluginEntries, type NcPluginManifest } from '../../src/index.js';
+const man: NcPluginManifest = { ncPlugin: 1, id: 'me.trem', name: 'Trem', version: '1.0.0', author: 'Me', licence: 'MIT', dsp: 'trem.dsp.js', params: [{ id: 'rate', label: 'Rate', minValue: 0.1, maxValue: 20 }] };
+void validateManifest(man).manifest?.params[0].discreteStep;
+void loadPlugin(ctx, 'https://example.com/plugin.json').then(({ entry }) => slots.addEffect(entry.type));
+for (const c of slots.getChain()) if (c.plugin?.status === 'missing') void c.plugin.url;
+void pluginEntries().map((e) => e.plugin.listed);

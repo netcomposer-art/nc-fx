@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/netcomposer-art/nc-fx/main/schema/plugin-manifest.schema.json",
+  "title": "NetComposer insert plugin manifest (plugin.json), contract 1",
+  "description": "One insert effect: what it is, who made it, and its dials. The DSP is one file next to this one (see docs/plugins.md). Param fields use the names of Web Audio Modules 2.0's WamParameterConfiguration. nc-fx's validateManifest() applies these rules, plus: defaultValue within the range, an int's range in whole numbers, unique param ids.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ncPlugin", "id", "name", "version", "author", "licence", "dsp", "params"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "ncPlugin": { "const": 1, "description": "The plugin contract's version." },
+    "id": { "type": "string", "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$", "maxLength": 64, "description": "Unique and stable: yourname.effect. Saved in sessions." },
+    "name": { "type": "string", "minLength": 1, "maxLength": 40, "description": "The card's title." },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+    "author": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "licence": { "type": "string", "pattern": "^[A-Za-z0-9.+-]+(?: (?:AND|OR|WITH) [A-Za-z0-9.+-]+)*$", "maxLength": 64, "description": "An SPDX licence id, e.g. MIT." },
+    "description": { "type": "string", "maxLength": 200 },
+    "website": { "type": "string", "pattern": "^https://\\S+$", "maxLength": 2048 },
+    "keywords": { "type": "array", "maxItems": 8, "items": { "type": "string", "minLength": 1, "maxLength": 24 } },
+    "dsp": { "type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}\\.js$", "description": "The DSP file's name, in the same folder as plugin.json." },
+    "params": { "type": "array", "maxItems": 15, "items": { "$ref": "#/$defs/param" } }
+  },
+  "$defs": {
+    "param": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$", "not": { "const": "bypass" } },
+        "label": { "type": "string", "minLength": 1, "maxLength": 24 },
+        "type": { "enum": ["float", "int", "boolean", "choice"], "default": "float" },
+        "defaultValue": { "type": "number", "description": "Default: minValue." },
+        "minValue": { "type": "number" },
+        "maxValue": { "type": "number" },
+        "discreteStep": { "type": "number", "exclusiveMinimum": 0, "description": "The dial's step (float: about a hundredth of the range when left out)." },
+        "exponent": { "type": "number", "exclusiveMinimum": 0, "description": "WAM's skew; kept for WAM hosts, the Studio's dials are linear." },
+        "choices": { "type": "array", "minItems": 2, "maxItems": 16, "items": { "type": "string", "minLength": 1, "maxLength": 24 } },
+        "units": { "type": "string", "maxLength": 8, "description": "The readout's unit: Hz, ms, %, dB ..." },
+        "more": { "type": "boolean", "description": "Show this dial under More." }
+      },
+      "allOf": [
+        { "if": { "properties": { "type": { "const": "choice" } }, "required": ["type"] }, "then": { "required": ["choices"] } },
+        { "if": { "properties": { "type": { "enum": ["float", "int"] } } }, "then": { "required": ["minValue", "maxValue"] } }
+      ]
+    }
+  }
+}

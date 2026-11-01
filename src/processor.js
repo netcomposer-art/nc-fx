@@ -30,6 +30,8 @@ class NcFxProcessor extends AudioWorkletProcessor {
     this.mBuf = new Float32Array(this.dsp.meterSize);
     this.mMsg = { t: 'lv', d: this.mBuf };
     this.mQuiet = false;
+    // Plugin failures (src/plugin-host.js): uid, code pairs, posted as { t: 'perr', d } when one happens (rare).
+    if (this.slots) { this.eBuf = new Int32Array(2 * (2 * this.dsp.slots + 2)); this.eMsg = { t: 'perr', d: this.eBuf, n: 0 }; }
     // Calls made on the main thread before this node existed, in call order. A time at or before the
     // current frame is clamped to now (and snaps); a future time is applied exactly. Equal frames keep
     // their order in the engine's queue. Runs once, in the constructor, before the first process().
@@ -69,7 +71,12 @@ class NcFxProcessor extends AudioWorkletProcessor {
       case 'tempo': d.setTempo(m.bpm, frame, snap); break;
       case 'clear': d.clear(frame, m.fadeMs); break;
       // Slot chain: add an effect (its params follow as snapped 'ps'), set one param, the order to play.
-      case 'add': if (this.slots) d.add(m.uid, m.type, frame); break;
+      case 'add':
+        if (this.slots && !d.add(m.uid, m.type, frame) && typeof m.type === 'string' && m.type.indexOf('plugin:') === 0) {
+          // A plugin whose DSP isn't registered in this scope: say so (the main thread shows it as missing).
+          this.port.postMessage({ t: 'perr', d: [m.uid, d.hasPlugin(m.type) ? 1 : 5], n: 1 });
+        }
+        break;
       case 'ps': if (this.slots) d.set(m.uid, m.k, m.v, frame, snap); break;
       case 'order': if (this.slots && m.uids) d.order(m.uids, frame, snap || m.immediate === true); break;
       case 'sync': if (this.slots && m.chain) this.sync(m.chain, m.order || [], frame); break;
@@ -100,6 +107,7 @@ class NcFxProcessor extends AudioWorkletProcessor {
     var mi = inputs.length > 1 ? inputs[1] : null;
     var mod = mi && mi.length > 0 ? mi[0] : null;
     this.dsp.process(inL, inR, out[0], out.length > 1 ? out[1] : null, out[0].length, currentFrame, mod);
+    if (this.slots && this.dsp.errorsPending[0] > 0) { this.eMsg.n = this.dsp.takeErrors(this.eBuf); this.port.postMessage(this.eMsg); }
     if (this.mOn) {
       this.mN += out[0].length;
       if (this.mN >= this.mEvery) {

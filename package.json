@@ -1,7 +1,7 @@
 {
   "name": "@netcomposer/nc-fx",
   "version": "0.1.0",
-  "description": "NetComposer's shared effects for instruments and the Studio: ASTRID's whole Hacks catalog (drive, delay, reverb, EQ, compressor, width, flanger, chorus, phaser, filters) as a fixed chain or ASTRID's movable slots, framework-free Web Audio, with an optional nc-ui kit panel.",
+  "description": "NetComposer's shared effects for instruments and the Studio: ASTRID's whole Hacks catalog (drive, delay, reverb, EQ, compressor, width, flanger, chorus, phaser, filters) as a fixed chain or ASTRID's movable slots, framework-free Web Audio, with an optional nc-ui kit panel, and insert plugins: a manifest plus one AudioWorklet DSP file, loaded from a URL, with a checker (nc-fx-check).",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -38,6 +38,13 @@
       "types": "./src/slots.d.ts",
       "default": "./src/slots.js"
     },
+    "./plugin": {
+      "types": "./src/plugin.d.ts",
+      "default": "./src/plugin.js"
+    },
+    "./plugin-worklet": {
+      "types": "./src/plugin-worklet.d.ts"
+    },
     "./params": {
       "types": "./src/params.d.ts",
       "default": "./src/params.js"
@@ -57,23 +64,30 @@
       "types": "./src/worklet-source.d.ts",
       "default": "./dist/worklet-source.js"
     },
+    "./schema/plugin-manifest.schema.json": "./schema/plugin-manifest.schema.json",
+    "./schema/plugin-registry.schema.json": "./schema/plugin-registry.schema.json",
     "./package.json": "./package.json"
   },
   "files": [
     "src",
     "dist",
+    "schema",
+    "docs",
+    "scripts/check-plugin.mjs",
     "README.md",
     "LICENSE",
     "NOTICE.md",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "AGENTS.md"
   ],
   "scripts": {
     "build": "node scripts/build.mjs",
     "check:build": "node scripts/build.mjs --check",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "node --test --expose-gc test/*.test.mjs",
+    "test": "node --test --expose-gc test/*.test.mjs && node --test test/checker/*.test.mjs",
     "test:browser": "node test/browser/run.mjs",
-    "size": "node scripts/size.mjs"
+    "size": "node scripts/size.mjs",
+    "check-plugin": "node scripts/check-plugin.mjs"
   },
   "engines": {
     "node": ">=20"
@@ -81,5 +95,8 @@
   "devDependencies": {
     "playwright": "^1.56.1",
     "typescript": "~5.9.3"
+  },
+  "bin": {
+    "nc-fx-check": "scripts/check-plugin.mjs"
   }
 }

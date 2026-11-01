@@ -13,7 +13,8 @@ export interface FxCatalogDial {
   step: number | null;
   /** Its engine param (src/units.js); 0 is the on flag. */
   k: number;
-  unit: 'dB' | '%' | 'beats' | 'ms' | 'Hz' | null;
+  /** A plugin's dial: its manifest's units (any short string). */
+  unit: 'dB' | '%' | 'beats' | 'ms' | 'Hz' | string | null;
   format: FxFormat;
   options?: ReadonlyArray<{ value: number; label: string }>;
   /** Shown under "More" (nc-fx's own dials; their defaults are ASTRID's sound). */
@@ -25,7 +26,7 @@ export interface FxCatalogDial {
   stepWhen?: ReadonlyArray<{ key: string; value: number; step: number }>;
   curve?: 'log'; overriddenBy?: string; exact?: true; minOn?: number; tempoSynced?: true;
 }
-export interface FxCatalogEntry { type: FxType; label: string; hidden?: true; fixed?: true; tempoSynced?: true; note?: string; dials: ReadonlyArray<FxCatalogDial> }
+export interface FxCatalogEntry { type: FxType; label: string; hidden?: true; fixed?: true; tempoSynced?: true; note?: string; dials: ReadonlyArray<FxCatalogDial>; plugin?: import('./plugin.js').FxPluginInfo }
 
 export const CATALOG: ReadonlyArray<FxCatalogEntry>;
 export const CATALOG_TYPES: ReadonlyArray<FxType>;
@@ -33,8 +34,16 @@ export const CATALOG_TYPES: ReadonlyArray<FxType>;
 export const CATALOG_MENU: ReadonlyArray<FxType>;
 export const ASTRID_NOTES: ReadonlyArray<number>;
 export const MAX_DELAY_S: 4.9;
-export function catalogType(t: unknown): FxType | null;
-export function catalogEntry(type: unknown): FxCatalogEntry | null;
+/** A catalog type, or a registered plugin's 'plugin:<id>'. */
+export function catalogType(t: unknown): FxType | import('./plugin.js').FxPluginType | null;
+/** Built-in effects and registered plugins (src/plugin.js). */
+export function catalogEntry(type: unknown): FxCatalogEntry | import('./plugin.js').FxPluginEntry | null;
+/** The registered plugins' entries, in registration order. */
+export function pluginEntries(): import('./plugin.js').FxPluginEntry[];
+/** cb(type) after each plugin registers; returns an unsubscribe function. */
+export function onPluginEntry(cb: (type: import('./plugin.js').FxPluginType) => void): () => void;
+export function addPluginEntry(entry: import('./plugin.js').FxPluginEntry): void;
+export function isPluginType(t: unknown): t is import('./plugin.js').FxPluginType;
 export function catalogDial(type: unknown, key: string): FxCatalogDial | null;
 export function lawValue(law: FxLaw, v: number): number | null;
 export function dialDsp(dial: FxCatalogDial, v: number): number;

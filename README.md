@@ -479,15 +479,36 @@ The processor is registered once per context, as `nc-fx@1`, so several instances
   never animate. One-off feedback uses nc-ui's motion roles (150 ms) and turns off under
   `prefers-reduced-motion`. The tests lint both rules.
 
+## Plugins
+
+New insert effects don't need a fork of nc-fx: a plugin is a `plugin.json` (name, version, author, licence, dials)
+and one DSP script that runs in the AudioWorklet. Once loaded it is a catalog entry like the built-ins, so hosts
+render its card, meters, saves and presets with no plugin code; it plays as one box of the slot chain.
+
+```js
+import { loadPlugin, createFxCore } from '@netcomposer/nc-fx';
+const { entry } = await loadPlugin(ctx, 'https://example.com/tremolo/plugin.json', { moduleUrl: workletUrl });
+fx.addEffect(entry.type); // 'plugin:netcomposer.tremolo'
+```
+
+```sh
+npx -p github:netcomposer-art/nc-fx nc-fx-check ./my-plugin   # PASS/FAIL per check, --json for agents
+```
+
+The guide, for people and agents: [docs/plugins.md](docs/plugins.md). The template:
+[netcomposer-art/nc-plugin-template](https://github.com/netcomposer-art/nc-plugin-template). The manifest's JSON
+Schema: [schema/plugin-manifest.schema.json](schema/plugin-manifest.schema.json).
+
 ## Development
 
 ```sh
 npm ci
 npm run build          # regenerate dist/ after editing src/dsp.js, src/processor.js or src/ui-style.js
-npm test               # node tests (params, catalog, state, DSP, ASTRID and Bass parity, allocation, denormals, host, style)
+npm test               # node tests (params, catalog, state, DSP, ASTRID and Bass parity, allocation, denormals, host, style, plugins)
 npm run test:browser   # headless Chrome: a real AudioWorklet in an OfflineAudioContext, plus the panel
                        # (PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs for a Playwright that has its browsers)
 node test/bench/effects-cpu.mjs   # µs per 128-frame block, per effect
+node scripts/check-plugin.mjs <plugin folder>   # the plugin checker (nc-fx-check)
 npm run typecheck
 npm run size
 ```
