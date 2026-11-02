@@ -7,7 +7,7 @@ export {
 export type { FxType, FxCatalogEntry, FxCatalogDial, FxFormat, FxLaw } from './catalog.js';
 export { CATALOG, CATALOG_MENU, catalogEntry, catalogDial, formatDial, describeCatalog, pluginEntries, onPluginEntry, isPluginType } from './catalog.js';
 export type { FxPluginType, FxPluginEntry, FxPluginInfo, FxPluginStatus, NcPluginManifest, NcPluginManifestClean, NcPluginParam, NcPluginListing, NcPluginRegistry, LoadPluginOptions } from './plugin.js';
-export { PLUGIN_API, PLUGIN_ERRORS, validateManifest, validateRegistry, pluginEntryFromManifest, registerPlugin, loadPlugin, loadListedPlugin, fetchRegistry, sha256Integrity, pluginType, toWamDescriptor, toWamParameterInfo } from './plugin.js';
+export { PLUGIN_API, PLUGIN_ERRORS, validateManifest, validateRegistry, pluginEntryFromManifest, registerPlugin, loadPlugin, loadPluginFiles, MAX_DSP_BYTES, loadListedPlugin, fetchRegistry, sha256Integrity, pluginType, toWamDescriptor, toWamParameterInfo } from './plugin.js';
 export type { FxSlotState, FxSlotV2, AstridHackSlot } from './slots.js';
 export { SLOTS_VERSION, DEFAULT_SLOTS, migrateSlots, sanitizeSlots, newSlot, slotName, moveSlot, toAstridHacks, toAstridDocument } from './slots.js';
 export type { EqDials, EqBand, EqGraphSpec, EqGraphBandSpec, EqGraphOptions, FxSpectrum } from './eq.js';

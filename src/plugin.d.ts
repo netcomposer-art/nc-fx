@@ -106,6 +106,10 @@ export function pluginEntryFromManifest(manifest: NcPluginManifestClean, info?: 
 export function registerPlugin(manifest: NcPluginManifest, info?: { url?: string; listed?: boolean }): FxPluginEntry;
 /** Fetch, check, load into the context's AudioWorklet and register. Only on a user's action: it runs the plugin's code. */
 export function loadPlugin(ctx: BaseAudioContext, url: string | URL, opts?: LoadPluginOptions): Promise<{ entry: FxPluginEntry; manifest: NcPluginManifestClean; url: string }>;
+/** The largest DSP file the contract allows: 256 KB. */
+export const MAX_DSP_BYTES: number;
+/** Load from the two files' contents (no network): for plugins on this computer. `url` is what sessions save (default `local:<id>`), never fetched. Only on a user's action. */
+export function loadPluginFiles(ctx: BaseAudioContext, files: { manifest: string | NcPluginManifest; dsp: string; dspName?: string }, opts?: { moduleUrl?: string | URL; url?: string }): Promise<{ entry: FxPluginEntry; manifest: NcPluginManifestClean; url: string }>;
 export function loadListedPlugin(ctx: BaseAudioContext, item: NcPluginListing, registryUrl: string, opts?: Omit<LoadPluginOptions, 'integrity' | 'listed' | 'expect'>): Promise<{ entry: FxPluginEntry; manifest: NcPluginManifestClean; url: string }>;
 export function fetchRegistry(url: string | URL, opts?: { fetch?: typeof fetch; base?: string }): Promise<{ registry: NcPluginRegistry; url: string; errors: string[] }>;
 export function sha256Integrity(bytes: Uint8Array | ArrayBuffer): Promise<string>;

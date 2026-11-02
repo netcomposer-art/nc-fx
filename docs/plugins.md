@@ -130,6 +130,8 @@ Types for an editor: [src/plugin-worklet.d.ts](../src/plugin-worklet.d.ts).
 - **Guard.** If `create()`, `set()`, `process()` or `reset()` throws, or `process()` writes NaN, infinity or a
   sample past ±64 (+36 dBFS), nc-fx stops calling the plugin, passes the slot's input through, and the card says so.
   The rest of the mix plays on. Adding it again gives it a fresh start.
+- **Ceiling.** Your output is held within ±4 (+12 dBFS, the checker's `level` limit). A plugin that passes the
+  checker never reaches it; one that gets too loud is clipped there instead of blasting the mix.
 - **Meters, saving, Scenes, missing plugins.** A session saves the plugin's id, URL, version and dials. If
   the plugin can't be loaded, its slot shows as missing: a wire, its dials kept for later.
 
@@ -200,12 +202,14 @@ still load any plugin from a URL; that shows a warning first.
 ## For hosts
 
 ```js
-import { loadPlugin, fetchRegistry, loadListedPlugin, createFxCore } from '@netcomposer/nc-fx';
+import { loadPlugin, loadPluginFiles, fetchRegistry, loadListedPlugin, createFxCore } from '@netcomposer/nc-fx';
 
 const { registry, url } = await fetchRegistry('/plugins/registry.json');           // the listed ones
 const { entry } = await loadListedPlugin(ctx, registry.plugins[0], url, { moduleUrl }); // sha256 checked
 // or, after the user agreed to run its code:
 const { entry: e2 } = await loadPlugin(ctx, 'https://example.com/fx/plugin.json', { moduleUrl });
+// or from files on the user's computer (picked, or kept in the browser): no fetch, saved as 'local:<id>'
+const { entry: e3 } = await loadPluginFiles(ctx, { manifest: jsonText, dsp: dspText, dspName: 'fx.dsp.js' }, { moduleUrl });
 
 const fx = createFxCore(ctx, { slots: 8, moduleUrl });
 fx.addEffect(entry.type);           // 'plugin:netcomposer.tremolo': a catalog entry like 'delay'
@@ -220,6 +224,9 @@ fx.getChain()[0].plugin;            // { id, version, url, name, status: 'ready'
   `loadPlugin`), every chain plays it, click-free.
 - **Load code only on a user's action.** A shared session can name any URL, so a host should auto-load only listed
   plugins (by registry match) and ask before anything else.
+- **Local plugins.** `loadPluginFiles` takes the two files' text, checks plugin.json and the 256 KB limit, and runs
+  the DSP from a Blob URL like `loadPlugin`. Its slots save `url: 'local:<id>'`, which slot states keep and nothing
+  fetches: the host finds the files again (the Studio keeps a copy in IndexedDB).
 - **One version per page.** Loading another version of a loaded id fails; reload the page to switch.
 - **CSP.** The DSP is run from a Blob URL of the bytes that were fetched (and checked), so `worker-src blob:` (or
   `script-src blob:`) must be allowed, and `connect-src` must allow the plugin's host. netcomposer.art sets no CSP.

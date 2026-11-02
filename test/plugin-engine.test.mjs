@@ -18,6 +18,7 @@ let calls = 0;
 registerNcFxPlugin({ id: 'test.nan', version: '1.0.0', params: [], create: () => ({ process(a, b, c, d, n) { calls++; for (let i = 0; i < n; i++) { c[i] = calls > 10 ? NaN : a[i]; d[i] = b[i]; } } }) });
 registerNcFxPlugin({ id: 'test.throw', version: '1.0.0', params: [], create: () => ({ process() { throw new Error('boom'); } }) });
 registerNcFxPlugin({ id: 'test.loud', version: '1.0.0', params: [], create: () => ({ process(a, b, c, d, n) { for (let i = 0; i < n; i++) { c[i] = 100; d[i] = 100; } } }) });
+registerNcFxPlugin({ id: 'test.hot', version: '1.0.0', params: [], create: () => ({ process(a, b, c, d, n) { for (let i = 0; i < n; i++) { c[i] = a[i] * 40; d[i] = -b[i] * 40; } } }) });
 registerNcFxPlugin({ id: 'test.nocreate', version: '1.0.0', params: [], create: () => { throw new Error('no'); } });
 
 const name = (id) => `plugin:test.${id}@1.0.0`;
@@ -115,6 +116,21 @@ for (const [id, code, what] of [['nan', 3, 'NaN'], ['throw', 2, 'a throw'], ['lo
     assert.ok(same(oL.subarray(SR / 4), L.subarray(SR / 4)));
   });
 }
+
+test('the ceiling: a plugin louder than +12 dBFS (but not runaway) is held at +-4 and keeps playing, not reported', () => {
+  const [L, R] = noiseBursts(SR / 4, 7);
+  const dsp = chain([[name('hot'), [[0, 1]]]]);
+  const [oL, oR] = run(dsp, L, R);
+  let peak = 0, over = 0;
+  for (let i = 0; i < oL.length; i++) { peak = Math.max(peak, Math.abs(oL[i]), Math.abs(oR[i])); if (Math.abs(L[i]) * 40 > 4) over++; }
+  assert.ok(over > 0, 'the test signal does go past the ceiling');
+  assert.ok(peak <= 4, `peak ${peak}`);
+  assert.ok(peak > 3.9, 'and it is held at the ceiling, not bypassed');
+  assert.equal(dsp.errorsPending[0], 0);
+  const quiet = chain([[name('gain'), [[0, 1], [1, 0.5]]]]);
+  const [qL] = run(quiet, L, R);
+  assert.ok(close(qL, L.map((x) => x * 0.5)), 'a plugin under the ceiling is untouched');
+});
 
 test('the guard: a fresh add of a failed plugin gets a fresh chance; an instant clear calls reset()', () => {
   let resets = 0;

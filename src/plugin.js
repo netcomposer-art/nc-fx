@@ -186,6 +186,22 @@ async function fetchBytes(url, fetchFn, integrity, what) {
 
 var loaded = typeof WeakMap === 'function' ? new WeakMap() : null;
 
+/** Load a plugin's DSP source into the context's AudioWorklet once per id@version (after nc-fx's own module). */
+async function installDsp(ctx, m, source, sourceUrl, moduleUrl) {
+  var key = m.id + '@' + m.version, per = loaded && loaded.get(ctx);
+  if (!per && loaded) { per = {}; loaded.set(ctx, per); }
+  if (per && per[key]) return per[key];
+  var p = (async function () {
+    var src = await source();
+    await loadFxWorklet(ctx, moduleUrl);
+    // The bytes that were checked are the bytes that run: a Blob URL of the text (CSP: worker-src blob:).
+    var blob = URL.createObjectURL(new Blob([src + '\n//# sourceURL=' + sourceUrl + '\n'], { type: 'text/javascript' }));
+    try { await ctx.audioWorklet.addModule(blob); } finally { URL.revokeObjectURL(blob); }
+  })();
+  if (per) { per[key] = p; p.catch(function () { delete per[key]; }); }
+  return p;
+}
+
 /**
  * Load a plugin from its manifest's URL onto a context: fetch plugin.json, check it, fetch its DSP file, load that
  * into the context's AudioWorklet (after nc-fx's own module, so registerNcFxPlugin exists), and register it in the
@@ -211,21 +227,42 @@ export async function loadPlugin(ctx, url, opts) {
   var had = catalogEntry(pluginType(m.id));
   if (had && had.plugin.version !== m.version) throw new Error('nc-fx plugin: ' + m.name + ' ' + had.plugin.version + ' is already loaded on this page. Reload the page to use ' + m.version + '.');
   var dspUrl = new URL(m.dsp, u);
-  var key = m.id + '@' + m.version, per = loaded && loaded.get(ctx);
-  if (!per && loaded) { per = {}; loaded.set(ctx, per); }
-  if (!per || !per[key]) {
-    var p = (async function () {
-      var src = await fetchBytes(dspUrl.href, fetchFn, integ.dsp, 'DSP file');
-      await loadFxWorklet(ctx, o.moduleUrl);
-      // The bytes that were checked are the bytes that run: a Blob URL of the fetched text (CSP: worker-src blob:).
-      var blob = URL.createObjectURL(new Blob([src + '\n//# sourceURL=' + dspUrl.href + '\n'], { type: 'text/javascript' }));
-      try { await ctx.audioWorklet.addModule(blob); } finally { URL.revokeObjectURL(blob); }
-    })();
-    if (per) { per[key] = p; p.catch(function () { delete per[key]; }); }
-    await p;
-  } else await per[key];
+  await installDsp(ctx, m, function () { return fetchBytes(dspUrl.href, fetchFn, integ.dsp, 'DSP file'); }, dspUrl.href, o.moduleUrl);
   var entry = registerPlugin(m, { url: u.href, listed: o.listed === true });
   return { entry: entry, manifest: m, url: u.href };
+}
+
+/** The largest DSP file the contract allows (docs/plugins.md): 256 KB. */
+export var MAX_DSP_BYTES = 256 * 1024;
+
+/**
+ * Load a plugin from its two files' contents, with no network: plugin.json (text or parsed JSON) and the DSP script's
+ * text. For plugins on this computer (picked files, or a copy kept in the browser). Only on a user's action: this
+ * runs the plugin's code. `url` is what sessions save as the plugin's address (default `local:<id>`); it is never
+ * fetched. Resolves { entry, manifest, url }; rejects with a sentence to show.
+ * @param {BaseAudioContext} ctx
+ * @param {{ manifest: string | object, dsp: string, dspName?: string }} files
+ * @param {{ moduleUrl?: string|URL, url?: string }} [opts]
+ */
+export async function loadPluginFiles(ctx, files, opts) {
+  var o = opts || {}, f = files || {};
+  var raw = f.manifest;
+  if (typeof raw === 'string') {
+    try { raw = JSON.parse(raw); } catch (e) { throw new Error('nc-fx plugin: plugin.json is not JSON'); }
+  }
+  var v = validateManifest(raw);
+  if (!v.ok) throw new Error('nc-fx plugin: plugin.json: ' + v.errors.join('; '));
+  var m = v.manifest;
+  if (typeof f.dsp !== 'string' || !f.dsp.trim()) throw new Error('nc-fx plugin: ' + m.name + ' needs its DSP file, ' + m.dsp);
+  if (typeof f.dspName === 'string' && f.dspName !== m.dsp) throw new Error('nc-fx plugin: plugin.json names its DSP file ' + m.dsp + ', not ' + f.dspName);
+  if (new TextEncoder().encode(f.dsp).length > MAX_DSP_BYTES) throw new Error('nc-fx plugin: ' + m.dsp + ' is over 256 KB');
+  var url = typeof o.url === 'string' && o.url ? o.url : 'local:' + m.id;
+  var had = catalogEntry(pluginType(m.id));
+  if (had && had.plugin.version !== m.version) throw new Error('nc-fx plugin: ' + m.name + ' ' + had.plugin.version + ' is already loaded on this page. Reload the page to use ' + m.version + '.');
+  var src = f.dsp;
+  await installDsp(ctx, m, async function () { return src; }, url.replace(/[^A-Za-z0-9:._@\/-]/g, '_') + '/' + m.dsp, o.moduleUrl);
+  var entry = registerPlugin(m, { url: url, listed: false });
+  return { entry: entry, manifest: m, url: url };
 }
 
 /**

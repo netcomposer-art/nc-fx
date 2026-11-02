@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+**Local plugins and a ceiling** (feat/local-plugins, for the Studio's local plugins):
+
+- `loadPluginFiles(ctx, { manifest, dsp, dspName? }, { moduleUrl, url? })` loads a plugin from its two files'
+  text, no network (for files picked on the user's computer). Slots save it as `url: 'local:<id>'`; slot states
+  now keep `local:<id>` URLs as well as http(s) ones. `MAX_DSP_BYTES` (256 KB) is exported.
+- **Ceiling.** A plugin's output is held within ±4 (+12 dBFS, `PLUGIN_CEILING`, the checker's level limit) on
+  top of the guard (throw, NaN, infinity, ±64 runaway). No change for a plugin that passes the checker, and none
+  with no plugin in the chain.
+
 **Insert plugins** (feat/plugins, Peter 2026-11-01: "Do it"):
 
 - **The contract.** A plugin is `plugin.json` (`ncPlugin: 1`, id, name, version, author, licence, params with

@@ -15,6 +15,9 @@
 //     +-64 (+36 dBFS: runaway feedback), the unit stops calling the plugin and passes its input through (the block it
 //     caught is replaced by the dry input). It reports once (ctl OP_ERR), and the processor tells the main thread,
 //     which shows it on the card. A fresh add of the plugin (a new slot) gets a fresh chance;
+//   - a ceiling: a plugin's output is held within +-4 (+12 dBFS, the checker's level limit), so a plugin that gets
+//     too loud, but not loud enough to count as runaway, can't blast the rest of the chain. A plugin that passes
+//     nc-fx-check never reaches it, so it changes nothing for one that does;
 //   - subnormal samples from the plugin are flushed to 0 (below 1e-30), so a decaying tail can't slow the chain.
 // Every buffer is made when the unit is made (on the control path); run() allocates nothing.
 
@@ -29,6 +32,8 @@ export var OP_ERR = 13;
 /** Error codes (the main thread names them: src/plugin.js PLUGIN_ERRORS). */
 export var PERR_CREATE = 1, PERR_PROCESS = 2, PERR_OUTPUT = 3, PERR_SET = 4, PERR_MISSING = 5;
 var RUNAWAY = 64;
+/** The most a plugin's output may be (+12 dBFS): louder samples are held there. */
+export var PLUGIN_CEILING = 4;
 var PLUGIN_ID = /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/;
 
 /** Registered plugins, in registration order (code = PLUGIN_BASE + index). */
@@ -125,6 +130,8 @@ export function createPluginUnit(E, code) {
       x = oL[j]; y = oR[j];
       if (x > -1e-30 && x < 1e-30) x = 0;
       if (y > -1e-30 && y < 1e-30) y = 0;
+      if (x > 4) x = 4; else if (x < -4) x = -4; // PLUGIN_CEILING, as a literal: no lookup on the audio path
+      if (y > 4) y = 4; else if (y < -4) y = -4;
       if (b >= 0.999) { BL[from + j] = x; BR[from + j] = y; }
       else if (b > 0.001) {
         var xt = (b - 0.001) * 1.002004008016032, xs = xt * xt * (3 - 2 * xt);
