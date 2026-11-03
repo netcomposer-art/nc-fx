@@ -1,0 +1,10 @@
+{
+  "ncPlugin": 1,
+  "id": "test.stuck-regex",
+  "name": "Stuck regex",
+  "version": "1.0.0",
+  "author": "Test",
+  "licence": "MIT",
+  "dsp": "stuck-regex.dsp.js",
+  "params": [{ "id": "amount", "label": "Amount", "minValue": 0, "maxValue": 1, "defaultValue": 1 }]
+}

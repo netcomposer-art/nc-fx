@@ -15,8 +15,9 @@ import {
 } from './params.js';
 import { CATALOG, CATALOG_MENU, catalogType, catalogEntry, catalogDial, formatDial, describeCatalog, onPluginEntry, pluginEntries, isPluginType } from './catalog.js';
 import { PLUGIN_ERRORS } from './plugin.js';
-export { PLUGIN_API, PLUGIN_ERRORS, validateManifest, validateRegistry, pluginEntryFromManifest, registerPlugin, loadPlugin, loadListedPlugin, fetchRegistry, sha256Integrity, pluginType, toWamDescriptor, toWamParameterInfo } from './plugin.js';
+export { PLUGIN_API, PLUGIN_ERRORS, validateManifest, validateRegistry, pluginEntryFromManifest, registerPlugin, loadPlugin, loadPluginFiles, MAX_DSP_BYTES, guardLoops, LOOP_GUARD, loadListedPlugin, fetchRegistry, sha256Integrity, pluginType, toWamDescriptor, toWamParameterInfo } from './plugin.js';
 export { pluginEntries, onPluginEntry, isPluginType };
+export { watchAudioStall } from './watchdog.js';
 import { SLOTS_VERSION, DEFAULT_SLOTS, migrateSlots, sanitizeSlots, newSlot, slotName, moveSlot, slotProgram, toAstridHacks, toAstridDocument } from './slots.js';
 export { EQ_LOW_HZ, EQ_HIGH_HZ, EQ_RANGE_DB, eqBands, eqResponse, eqCoefficients, eqGraph, eqPatchDials, eqResetDials, fxSpectrum } from './eq.js';
 

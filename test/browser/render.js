@@ -1,5 +1,5 @@
 // Runs in headless Chrome: real AudioWorklet in an OfflineAudioContext, plus the panel in a real DOM.
-import { createFxCore, createFx, defaultState, compile } from '../../src/index.js';
+import { createFxCore, createFx, defaultState, compile, loadPluginFiles, PLUGIN_ERRORS } from '../../src/index.js';
 import { createFxDsp } from '../../src/dsp.js';
 import { createFxChainDsp } from '../../src/chain.js';
 import { sanitizeSlots, slotProgram } from '../../src/slots.js';
@@ -253,6 +253,37 @@ async function main() {
     check('slots panel: a host-moved slider is marked data-modulated', q('[data-testid="nc-fx-chorus-1-mix"]').hasAttribute('data-modulated'));
     panel.destroy();
     check('slots panel: destroy', !host.querySelector('.nc-fx'));
+  }
+
+  // The loop guard in a real AudioWorklet: a plugin stuck in an infinite loop (from its 20th block on) is stopped and
+  // reported (code 6), the render finishes, the box is a wire from then on; the same file without the stuck branch
+  // plays through untouched.
+  {
+    const manifest = (id) => ({ ncPlugin: 1, id, name: 'Stuck', version: '1.0.0', author: 'test', licence: 'MIT', dsp: 'stuck.dsp.js', params: [] });
+    const dsp = (id, stick) => `registerNcFxPlugin({ id: '${id}', version: '1.0.0', params: [], create: function () { var k = 0; return { process: function (a, b, c, d, n) { k++; ${stick ? 'while (k > 20) {}' : ''} for (var i = 0; i < n; i++) { c[i] = a[i] * 0.5; d[i] = b[i] * 0.5; } } }; } });`;
+    const run = async (id, stick) => {
+      const ctx = new OfflineAudioContext(2, N, SR);
+      await loadPluginFiles(ctx, { manifest: manifest(id), dsp: dsp(id, stick) });
+      const core = createFxCore(ctx, { slots: 1, crossfade: 0 });
+      core.addEffect('plugin:' + id);
+      await core.ready;
+      const buf = ctx.createBuffer(2, N, SR);
+      buf.copyToChannel(inL, 0); buf.copyToChannel(inR, 1);
+      const src = ctx.createBufferSource(); src.buffer = buf;
+      src.connect(core.input); core.output.connect(ctx.destination); src.start(0);
+      const t0 = performance.now();
+      const out = await ctx.startRendering();
+      await new Promise((r) => setTimeout(r, 50));
+      return { L: out.getChannelData(0), ms: performance.now() - t0, plugin: core.getChain()[0].plugin };
+    };
+    const stuck = await run('test.browser-stuck', true);
+    const tail = stuck.L.subarray(N / 2), dryTail = inL.subarray(N / 2);
+    check('loop guard (real worklet): a plugin stuck in an infinite loop is stopped (code 6) and the render finishes',
+      stuck.plugin && stuck.plugin.status === 'failed' && stuck.plugin.error === PLUGIN_ERRORS[6] && stuck.ms < 20000, `${stuck.plugin && stuck.plugin.status}, ${stuck.ms.toFixed(0)} ms`);
+    check('loop guard (real worklet): after it is stopped the box passes its input, no NaN', same(tail, dryTail) && stuck.L.every((x) => Number.isFinite(x)));
+    const fine = await run('test.browser-fine', false);
+    check('loop guard (real worklet): the same plugin without the endless loop plays (half level), not stopped',
+      fine.plugin.status === 'ready' && Math.abs(fine.L[5000] - inL[5000] * 0.5) < 1e-6, fine.plugin.status);
   }
 
   // Module shading (nc-ui docs/design-rules.md), with the real nc-ui sheet: panel stack-1, cards stack-2, -3, -4 by

@@ -24,12 +24,14 @@ function isRecord(v) { return !!v && typeof v === 'object' && !Array.isArray(v);
 
 // A plugin slot (docs/plugins.md) also carries `plugin`: { id, version, url, name }, what a host needs to load the
 // plugin again. A slot whose plugin isn't registered on this page is kept as saved (its dials as plain numbers):
-// it plays as a wire ("missing") until the plugin registers, and saves back unchanged.
+// it plays as a wire ("missing") until the plugin registers, and saves back unchanged. `url` is http(s), or
+// `local:<id>` for a plugin loaded from files on the user's computer (loadPluginFiles; never fetched).
+var LOCAL = /^local:[A-Za-z0-9._@-]{1,200}$/;
 var SEMVER = /^\d+\.\d+\.\d+$/;
 function cleanRef(raw, type) {
   var r = isRecord(raw) ? raw : {}, id = type.slice(7);
   var ref = { id: id, version: typeof r.version === 'string' && SEMVER.test(r.version) ? r.version : '0.0.0', url: '', name: id };
-  if (typeof r.url === 'string' && r.url.length <= 2048 && /^https?:\/\//.test(r.url)) ref.url = r.url;
+  if (typeof r.url === 'string' && r.url.length <= 2048 && (/^https?:\/\//.test(r.url) || LOCAL.test(r.url))) ref.url = r.url;
   if (typeof r.name === 'string' && r.name.trim()) ref.name = r.name.trim().slice(0, 40);
   return ref;
 }

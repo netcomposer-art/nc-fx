@@ -11,6 +11,8 @@
 
 import { addPluginEntry, catalogEntry } from './catalog.js';
 import { loadFxWorklet } from './index.js';
+import { guardLoops } from './loop-guard.js';
+export { guardLoops, LOOP_GUARD } from './loop-guard.js';
 
 /** The contract's version: a manifest's `ncPlugin`. */
 export var PLUGIN_API = 1;
@@ -29,7 +31,8 @@ export var PLUGIN_ERRORS = {
   2: 'It crashed while playing.',
   3: 'It made bad numbers (NaN, infinity or runaway level).',
   4: 'It crashed when a dial moved.',
-  5: 'Its code is not loaded.'
+  5: 'Its code is not loaded.',
+  6: 'It got stuck in a loop, so it was stopped.'
 };
 
 function isRecord(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
@@ -186,11 +189,47 @@ async function fetchBytes(url, fetchFn, integrity, what) {
 
 var loaded = typeof WeakMap === 'function' ? new WeakMap() : null;
 
+/** The error a load throws when another version of the plugin already runs on this page: `reload` is true. */
+function reloadError(m, had) {
+  var e = new Error('nc-fx plugin: ' + m.name + ' ' + had + ' is already loaded on this page. Reload the page to use ' + m.version + '.');
+  e.reload = true;
+  return e;
+}
+
+/**
+ * Load a plugin's DSP source into the context's AudioWorklet once per id@version (after nc-fx's own module), with the
+ * loop guard on (src/loop-guard.js). Resolves { stale }: true when this id@version already ran on this context from
+ * other code (a worklet can't swap a module's code: the page has to reload to hear the new one).
+ */
+async function installDsp(ctx, m, source, sourceUrl, moduleUrl) {
+  var key = m.id + '@' + m.version, per = loaded && loaded.get(ctx);
+  if (!per && loaded) { per = {}; loaded.set(ctx, per); }
+  var had = per && per[key];
+  if (had) {
+    var ran = await had;
+    var again = await source();
+    return { stale: again !== ran };
+  }
+  var p = (async function () {
+    var src = await source();
+    await loadFxWorklet(ctx, moduleUrl);
+    // The bytes that were checked are the bytes that run, with the loop guard's checks added (on the same lines): a
+    // Blob URL of the text (CSP: worker-src blob:).
+    var blob = URL.createObjectURL(new Blob([guardLoops(src) + '\n//# sourceURL=' + sourceUrl + '\n'], { type: 'text/javascript' }));
+    try { await ctx.audioWorklet.addModule(blob); } finally { URL.revokeObjectURL(blob); }
+    return src;
+  })();
+  if (per) { per[key] = p; p.catch(function () { delete per[key]; }); }
+  await p;
+  return { stale: false };
+}
+
 /**
  * Load a plugin from its manifest's URL onto a context: fetch plugin.json, check it, fetch its DSP file, load that
  * into the context's AudioWorklet (after nc-fx's own module, so registerNcFxPlugin exists), and register it in the
- * catalog. Only on a user's action: this runs the plugin's code. Resolves { entry, manifest, url }; rejects with a
- * sentence to show (bad manifest, network, integrity, another version loaded).
+ * catalog. Only on a user's action: this runs the plugin's code. Resolves { entry, manifest, url, stale } (stale: this
+ * id and version already ran on this page from other code, which keeps playing until a reload); rejects with a
+ * sentence to show (bad manifest, network, integrity, another version loaded: that error has `reload: true`).
  * @param {BaseAudioContext} ctx
  * @param {string|URL} url  plugin.json's address (https, or http on localhost)
  * @param {{ moduleUrl?: string|URL, integrity?: { manifest?: string, dsp?: string }, listed?: boolean,
@@ -209,23 +248,45 @@ export async function loadPlugin(ctx, url, opts) {
   var m = v.manifest;
   if (o.expect && ((o.expect.id && o.expect.id !== m.id) || (o.expect.version && o.expect.version !== m.version))) throw new Error('nc-fx plugin: ' + u.href + ' is ' + m.id + ' ' + m.version + ', not what the registry lists');
   var had = catalogEntry(pluginType(m.id));
-  if (had && had.plugin.version !== m.version) throw new Error('nc-fx plugin: ' + m.name + ' ' + had.plugin.version + ' is already loaded on this page. Reload the page to use ' + m.version + '.');
+  if (had && had.plugin.version !== m.version) throw reloadError(m, had.plugin.version);
   var dspUrl = new URL(m.dsp, u);
-  var key = m.id + '@' + m.version, per = loaded && loaded.get(ctx);
-  if (!per && loaded) { per = {}; loaded.set(ctx, per); }
-  if (!per || !per[key]) {
-    var p = (async function () {
-      var src = await fetchBytes(dspUrl.href, fetchFn, integ.dsp, 'DSP file');
-      await loadFxWorklet(ctx, o.moduleUrl);
-      // The bytes that were checked are the bytes that run: a Blob URL of the fetched text (CSP: worker-src blob:).
-      var blob = URL.createObjectURL(new Blob([src + '\n//# sourceURL=' + dspUrl.href + '\n'], { type: 'text/javascript' }));
-      try { await ctx.audioWorklet.addModule(blob); } finally { URL.revokeObjectURL(blob); }
-    })();
-    if (per) { per[key] = p; p.catch(function () { delete per[key]; }); }
-    await p;
-  } else await per[key];
+  var r = await installDsp(ctx, m, function () { return fetchBytes(dspUrl.href, fetchFn, integ.dsp, 'DSP file'); }, dspUrl.href, o.moduleUrl);
   var entry = registerPlugin(m, { url: u.href, listed: o.listed === true });
-  return { entry: entry, manifest: m, url: u.href };
+  return { entry: entry, manifest: m, url: u.href, stale: r.stale };
+}
+
+/** The largest DSP file the contract allows (docs/plugins.md): 256 KB. */
+export var MAX_DSP_BYTES = 256 * 1024;
+
+/**
+ * Load a plugin from its two files' contents, with no network: plugin.json (text or parsed JSON) and the DSP script's
+ * text. For plugins on this computer (picked files, or a copy kept in the browser). Only on a user's action: this
+ * runs the plugin's code. `url` is what sessions save as the plugin's address (default `local:<id>`); it is never
+ * fetched. Resolves { entry, manifest, url, stale } as loadPlugin does; rejects with a sentence to show (`reload: true`
+ * when another version runs on this page).
+ * @param {BaseAudioContext} ctx
+ * @param {{ manifest: string | object, dsp: string, dspName?: string }} files
+ * @param {{ moduleUrl?: string|URL, url?: string }} [opts]
+ */
+export async function loadPluginFiles(ctx, files, opts) {
+  var o = opts || {}, f = files || {};
+  var raw = f.manifest;
+  if (typeof raw === 'string') {
+    try { raw = JSON.parse(raw); } catch (e) { throw new Error('nc-fx plugin: plugin.json is not JSON'); }
+  }
+  var v = validateManifest(raw);
+  if (!v.ok) throw new Error('nc-fx plugin: plugin.json: ' + v.errors.join('; '));
+  var m = v.manifest;
+  if (typeof f.dsp !== 'string' || !f.dsp.trim()) throw new Error('nc-fx plugin: ' + m.name + ' needs its DSP file, ' + m.dsp);
+  if (typeof f.dspName === 'string' && f.dspName !== m.dsp) throw new Error('nc-fx plugin: plugin.json names its DSP file ' + m.dsp + ', not ' + f.dspName);
+  if (new TextEncoder().encode(f.dsp).length > MAX_DSP_BYTES) throw new Error('nc-fx plugin: ' + m.dsp + ' is over 256 KB');
+  var url = typeof o.url === 'string' && o.url ? o.url : 'local:' + m.id;
+  var had = catalogEntry(pluginType(m.id));
+  if (had && had.plugin.version !== m.version) throw reloadError(m, had.plugin.version);
+  var src = f.dsp;
+  var r = await installDsp(ctx, m, async function () { return src; }, url.replace(/[^A-Za-z0-9:._@\/-]/g, '_') + '/' + m.dsp, o.moduleUrl);
+  var entry = registerPlugin(m, { url: url, listed: false });
+  return { entry: entry, manifest: m, url: url, stale: r.stale };
 }
 
 /**

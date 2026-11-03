@@ -130,6 +130,14 @@ Types for an editor: [src/plugin-worklet.d.ts](../src/plugin-worklet.d.ts).
 - **Guard.** If `create()`, `set()`, `process()` or `reset()` throws, or `process()` writes NaN, infinity or a
   sample past ±64 (+36 dBFS), nc-fx stops calling the plugin, passes the slot's input through, and the card says so.
   The rest of the mix plays on. Adding it again gives it a fresh start.
+- **Loop guard.** Every `while`, `do ... while` and `for` loop in your file gets a cheap check (nc-fx rewrites the
+  loop's condition before the code runs; line numbers stay the same). A loop that is still going after 100 ms
+  in one `process()`, `set()` or `reset()` call, or 1000 ms in `create()` or the file's top level, is stopped
+  there: the card says "It got stuck in a loop, so it was stopped." and the slot passes its input (code 6). A
+  block takes about 3 ms, so a fast plugin is nowhere near it. The guard can't see a stuck built-in call (a
+  regular expression that backtracks forever, a huge `Array.fill`); hosts can catch that with `watchAudioStall`.
+- **Ceiling.** Your output is held within ±4 (+12 dBFS, the checker's `level` limit). A plugin that passes the
+  checker never reaches it; one that gets too loud is clipped there instead of blasting the mix.
 - **Meters, saving, Scenes, missing plugins.** A session saves the plugin's id, URL, version and dials. If
   the plugin can't be loaded, its slot shows as missing: a wire, its dials kept for later.
 
@@ -155,6 +163,13 @@ RESULT FAIL: 1 of 17 checks failed. Fix them and run again.
 Loop until every line is PASS (exit code 0). With `--json` the output is `{ ok, plugin, checks: [{ id, ok, level,
 message, fix?, data? }] }`; `level` is `pass`, `fail`, `warn` or `skip`. Exit codes: 0 pass, 1 a check failed, 2 usage.
 
+**Time limit.** Each check that runs your code runs on its own (a worker thread; `alloc` a child process; `browser`
+a Chromium page) with a time limit, 5 s by default (`--timeout <seconds>`). A check that runs past it is stopped
+and fails with "Timed out after 5 s: the plugin may hang (for example a regular expression that never finishes)";
+the other checks still run and the exit code is 1. The loop guard catches a loop that never ends (the check fails
+with a loop hint); the time limit catches the rest, such as a regular expression that backtracks for minutes. A
+plugin that is only slow on a busy machine can be given more time with `--timeout 20`.
+
 | Check | Fails when |
 |---|---|
 | `manifest` | plugin.json breaks a rule above (each problem is named). |
@@ -173,6 +188,7 @@ message, fix?, data? }] }`; `level` is `pass`, `fail`, `warn` or `skip`. Exit co
 | `alloc` | `process()` allocates (a heap-delta gate in a child process), or `set()` allocates more than 32 bytes a call. |
 | `engine` | nc-fx's real worklet engine stops the plugin. |
 | `bypass` | bypassed, the output isn't the input bit for bit (that would be an nc-fx bug). |
+| any check | it runs past the time limit (`--timeout`, default 5 s): the plugin may hang. |
 | `browser` | in headless Chromium (when Playwright is installed, or `--browser`): nc-fx's own loader can't load it into a real AudioWorklet, it's silent, or bypassed isn't bit-exact. |
 
 ## 4. Try it in the Studio
@@ -200,12 +216,14 @@ still load any plugin from a URL; that shows a warning first.
 ## For hosts
 
 ```js
-import { loadPlugin, fetchRegistry, loadListedPlugin, createFxCore } from '@netcomposer/nc-fx';
+import { loadPlugin, loadPluginFiles, fetchRegistry, loadListedPlugin, createFxCore } from '@netcomposer/nc-fx';
 
 const { registry, url } = await fetchRegistry('/plugins/registry.json');           // the listed ones
 const { entry } = await loadListedPlugin(ctx, registry.plugins[0], url, { moduleUrl }); // sha256 checked
 // or, after the user agreed to run its code:
 const { entry: e2 } = await loadPlugin(ctx, 'https://example.com/fx/plugin.json', { moduleUrl });
+// or from files on the user's computer (picked, or kept in the browser): no fetch, saved as 'local:<id>'
+const { entry: e3 } = await loadPluginFiles(ctx, { manifest: jsonText, dsp: dspText, dspName: 'fx.dsp.js' }, { moduleUrl });
 
 const fx = createFxCore(ctx, { slots: 8, moduleUrl });
 fx.addEffect(entry.type);           // 'plugin:netcomposer.tremolo': a catalog entry like 'delay'
@@ -220,7 +238,18 @@ fx.getChain()[0].plugin;            // { id, version, url, name, status: 'ready'
   `loadPlugin`), every chain plays it, click-free.
 - **Load code only on a user's action.** A shared session can name any URL, so a host should auto-load only listed
   plugins (by registry match) and ask before anything else.
-- **One version per page.** Loading another version of a loaded id fails; reload the page to switch.
+- **Local plugins.** `loadPluginFiles` takes the two files' text, checks plugin.json and the 256 KB limit, and runs
+  the DSP from a Blob URL like `loadPlugin`. Its slots save `url: 'local:<id>'`, which slot states keep and nothing
+  fetches: the host finds the files again (the Studio keeps a copy in IndexedDB).
+- **One version per page.** Loading another version of a loaded id fails with `err.reload === true`; reload the
+  page to switch. Loading the same id and version again with different code resolves with `stale: true`: the
+  worklet keeps the first code until the page is reloaded, so tell the user.
+- **Stuck plugins.** The loop guard stops a plugin stuck in a loop by itself (`status: 'failed'`, error
+  `PLUGIN_ERRORS[6]`); the context keeps playing. For anything it can't see, `watchAudioStall(ctx, { onStall,
+  onResume, stallMs: 1500 })` polls `ctx.currentTime` from the main thread and calls `onStall` once a running
+  context's clock has not moved for `stallMs` (a late timer, as in a background tab, doesn't count). It never
+  touches the context. A context stuck that way can't be closed or resumed (in Chrome, `close()` crashes the
+  page and a reload of that tab can hang), but a new AudioContext or a new tab plays: what to do is the host's call.
 - **CSP.** The DSP is run from a Blob URL of the bytes that were fetched (and checked), so `worker-src blob:` (or
   `script-src blob:`) must be allowed, and `connect-src` must allow the plugin's host. netcomposer.art sets no CSP.
 - **Zero cost.** With no plugin in a chain, the worklet renders exactly what nc-fx rendered before plugins

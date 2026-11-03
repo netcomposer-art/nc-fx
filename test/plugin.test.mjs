@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  createFxCore, validateManifest, validateRegistry, registerPlugin, loadPlugin, loadListedPlugin, sha256Integrity, catalogEntry,
+  createFxCore, validateManifest, validateRegistry, registerPlugin, loadPlugin, loadPluginFiles, loadListedPlugin, sha256Integrity, catalogEntry,
   formatDial, sanitizeSlots, pluginEntries, toWamDescriptor, toWamParameterInfo, PLUGIN_ERRORS, toAstridHacks
 } from '../src/index.js';
 import { mockContext } from './mock-audio.mjs';
@@ -57,13 +57,17 @@ test('slots keep plugins: registered ones clean, missing ones as saved; ASTRID e
     { type: 'plugin:netcomposer.tremolo', dials: { rate: 3.33, depth: 500 } },
     { type: 'plugin:someone.fuzz', id: 'fuzz-1', bypass: true, dials: { gain: 6, junk: 'x' }, plugin: { version: '2.1.0', url: 'https://example.com/fuzz/plugin.json', name: 'Fuzz' } },
     { type: 'plugin:someone.bad', plugin: { url: 'javascript:alert(1)' } },
-    { type: 'delay' }
+    { type: 'delay' },
+    { type: 'plugin:me.mangler', plugin: { version: '0.1.0', url: 'local:me.mangler', name: 'Mangler' } },
+    { type: 'plugin:me.odd', plugin: { url: 'local:../etc' } }
   ] }, 8);
   assert.deepEqual(s.chain[0], { id: 'tremolo-1', type: 'plugin:netcomposer.tremolo', bypass: false, dials: { rate: 3.3, depth: 100, shape: 0 },
     plugin: { id: 'netcomposer.tremolo', version: '1.0.0', url: 'https://netcomposer.art/plugins/tremolo/plugin.json', name: 'Tremolo' } });
   assert.deepEqual(s.chain[1], { id: 'fuzz-1', type: 'plugin:someone.fuzz', bypass: true, dials: { gain: 6 }, plugin: { id: 'someone.fuzz', version: '2.1.0', url: 'https://example.com/fuzz/plugin.json', name: 'Fuzz' } });
   assert.equal(s.chain[2].plugin.url, '', 'only http(s) URLs are kept');
   assert.equal(s.chain[3].type, 'delay');
+  assert.equal(s.chain[4].plugin.url, 'local:me.mangler', 'local:<id> (a plugin from files) is kept');
+  assert.equal(s.chain[5].plugin.url, '', 'local: only with an id');
   assert.deepEqual(sanitizeSlots(JSON.parse(JSON.stringify(s)), 8), s, 'round trip');
   const a = toAstridHacks(s);
   assert.deepEqual(a.hacks.map((h) => h.type), ['delay']);
@@ -161,6 +165,58 @@ test('loadPlugin: refuses http (except localhost), bad manifests, and files that
   await assert.rejects(loadListedPlugin(ctx, { ...item, version: '2.0.0' }, 'https://plugins.test/registry.json', { fetch: fakeFetch(files) }), /not what the registry lists/);
   const local = loadPlugin(ctx, 'http://localhost:5990/plugin.json', { fetch: async () => ({ ok: false, status: 404 }) });
   await assert.rejects(local, /404/, 'http on localhost is allowed (it gets as far as the fetch)');
+});
+
+test('loadPluginFiles: loads plugin.json and the DSP from their text (no fetch), saves as local:<id>', async () => {
+  const ctx = mockContext();
+  const m = JSON.stringify({ ...TREMOLO, id: 'test.files' });
+  const r = await loadPluginFiles(ctx, { manifest: m, dsp: 'registerNcFxPlugin({})', dspName: TREMOLO.dsp }, { moduleUrl: '/nc-fx/worklet.js' });
+  assert.equal(r.entry.type, 'plugin:test.files');
+  assert.equal(r.url, 'local:test.files');
+  assert.equal(r.entry.plugin.url, 'local:test.files');
+  assert.equal(r.entry.plugin.listed, false);
+  assert.equal(ctx.modules[0], '/nc-fx/worklet.js');
+  assert.match(ctx.modules[1], /^blob:/);
+  await loadPluginFiles(ctx, { manifest: JSON.parse(m), dsp: 'registerNcFxPlugin({})' });
+  assert.equal(ctx.modules.length, 2, 'once per context');
+  await assert.rejects(loadPluginFiles(ctx, { manifest: '{', dsp: 'x' }), /not JSON/);
+  await assert.rejects(loadPluginFiles(ctx, { manifest: '{"ncPlugin":1}', dsp: 'x' }), /id:/);
+  const other = JSON.stringify({ ...TREMOLO, id: 'test.files2' });
+  await assert.rejects(loadPluginFiles(ctx, { manifest: other, dsp: '' }), /needs its DSP file/);
+  await assert.rejects(loadPluginFiles(ctx, { manifest: other, dsp: 'x', dspName: 'other.js' }), /names its DSP file/);
+  await assert.rejects(loadPluginFiles(ctx, { manifest: other, dsp: 'x'.repeat(256 * 1024 + 1) }), /over 256 KB/);
+  await assert.rejects(loadPluginFiles(ctx, { manifest: JSON.stringify({ ...TREMOLO, id: 'test.files', version: '2.0.0' }), dsp: 'x' }), /already loaded/);
+});
+
+test('the code that runs has the loop guard on; loading the same id again says whether its code changed (stale)', async () => {
+  const { resolveObjectURL } = await import('node:buffer');
+  const ctx = mockContext();
+  const MOD = { moduleUrl: '/nc-fx/worklet.js' };
+  const texts = [];
+  const add = ctx.audioWorklet.addModule;
+  ctx.audioWorklet.addModule = async (url) => {
+    if (String(url).startsWith('blob:')) texts.push(await resolveObjectURL(url).text());
+    return add(url);
+  };
+  const m = JSON.stringify({ ...TREMOLO, id: 'test.stale' });
+  const dsp = 'var k = 0; while (k < 3) k++; registerNcFxPlugin({});';
+  const first = await loadPluginFiles(ctx, { manifest: m, dsp }, MOD);
+  assert.equal(first.stale, false);
+  assert.equal(texts.length, 1);
+  assert.match(texts[0], /while \(__ncFxLoop\(\) && \(k < 3\)\)/);
+  assert.match(texts[0], /\/\/# sourceURL=local:test\.stale\/tremolo\.dsp\.js/);
+  assert.equal((await loadPluginFiles(ctx, { manifest: m, dsp }, MOD)).stale, false, 'same code: nothing to reload');
+  const again = await loadPluginFiles(ctx, { manifest: m, dsp: dsp + ' // changed' }, MOD);
+  assert.equal(again.stale, true, 'new code under the same id and version: reload to hear it');
+  assert.equal(texts.length, 1, 'the worklet keeps the first code');
+  const err = await loadPluginFiles(ctx, { manifest: JSON.stringify({ ...TREMOLO, id: 'test.stale', version: '1.0.1' }), dsp }, MOD).catch((e) => e);
+  assert.match(err.message, /Reload the page/);
+  assert.equal(err.reload, true);
+  const files = { '/u/plugin.json': JSON.stringify({ ...TREMOLO, id: 'test.staleurl' }), '/u/tremolo.dsp.js': dsp };
+  const u = await loadPlugin(ctx, 'http://localhost:5990/u/plugin.json', { fetch: fakeFetch(files), ...MOD });
+  assert.equal(u.stale, false);
+  const u2 = await loadPlugin(ctx, 'http://localhost:5990/u/plugin.json', { fetch: fakeFetch({ ...files, '/u/tremolo.dsp.js': dsp + '\n' }), ...MOD });
+  assert.equal(u2.stale, true, 'a localhost plugin edited and loaded again');
 });
 
 test('validateRegistry: entries need ids, versions, a manifest and sha256 for both files', () => {

@@ -6,14 +6,16 @@ export {
 } from './params.js';
 export type { FxType, FxCatalogEntry, FxCatalogDial, FxFormat, FxLaw } from './catalog.js';
 export { CATALOG, CATALOG_MENU, catalogEntry, catalogDial, formatDial, describeCatalog, pluginEntries, onPluginEntry, isPluginType } from './catalog.js';
-export type { FxPluginType, FxPluginEntry, FxPluginInfo, FxPluginStatus, NcPluginManifest, NcPluginManifestClean, NcPluginParam, NcPluginListing, NcPluginRegistry, LoadPluginOptions } from './plugin.js';
-export { PLUGIN_API, PLUGIN_ERRORS, validateManifest, validateRegistry, pluginEntryFromManifest, registerPlugin, loadPlugin, loadListedPlugin, fetchRegistry, sha256Integrity, pluginType, toWamDescriptor, toWamParameterInfo } from './plugin.js';
+export type { FxPluginType, FxPluginEntry, FxPluginInfo, FxPluginStatus, NcPluginManifest, NcPluginManifestClean, NcPluginParam, NcPluginListing, NcPluginRegistry, LoadPluginOptions, LoadedPlugin } from './plugin.js';
+export { PLUGIN_API, PLUGIN_ERRORS, validateManifest, validateRegistry, pluginEntryFromManifest, registerPlugin, loadPlugin, loadPluginFiles, MAX_DSP_BYTES, guardLoops, LOOP_GUARD, loadListedPlugin, fetchRegistry, sha256Integrity, pluginType, toWamDescriptor, toWamParameterInfo } from './plugin.js';
 export type { FxSlotState, FxSlotV2, AstridHackSlot } from './slots.js';
 export { SLOTS_VERSION, DEFAULT_SLOTS, migrateSlots, sanitizeSlots, newSlot, slotName, moveSlot, toAstridHacks, toAstridDocument } from './slots.js';
 export type { EqDials, EqBand, EqGraphSpec, EqGraphBandSpec, EqGraphOptions, FxSpectrum } from './eq.js';
 export { EQ_LOW_HZ, EQ_HIGH_HZ, EQ_RANGE_DB, eqBands, eqResponse, eqCoefficients, eqGraph, eqPatchDials, eqResetDials, fxSpectrum } from './eq.js';
 import type { FxSlotState, AstridHackSlot } from './slots.js';
 import type { FxType } from './catalog.js';
+export { watchAudioStall } from './watchdog.js';
+export type { AudioStallOptions } from './watchdog.js';
 import type { FxPluginType, FxPluginStatus } from './plugin.js';
 
 export const PROCESSOR_NAME: 'nc-fx@1';

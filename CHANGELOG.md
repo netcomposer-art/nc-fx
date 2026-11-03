@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+**Local plugins and a ceiling** (feat/local-plugins, for the Studio's local plugins):
+
+- `loadPluginFiles(ctx, { manifest, dsp, dspName? }, { moduleUrl, url? })` loads a plugin from its two files'
+  text, no network (for files picked on the user's computer). Slots save it as `url: 'local:<id>'`; slot states
+  now keep `local:<id>` URLs as well as http(s) ones. `MAX_DSP_BYTES` (256 KB) is exported.
+- **Ceiling.** A plugin's output is held within ±4 (+12 dBFS, `PLUGIN_CEILING`, the checker's level limit) on
+  top of the guard (throw, NaN, infinity, ±64 runaway). No change for a plugin that passes the checker, and none
+  with no plugin in the chain (Peter 2026-11-02: the +12 dBFS cap stays).
+- **Loop guard** (Peter 2026-11-02: "yes" to a watchdog). `guardLoops(src)` (`src/loop-guard.js`) adds a
+  check to every `while`, `do ... while` and `for` loop in a plugin's DSP before it runs (text inserted only, line
+  numbers kept). In the worklet a call that loops past its budget (100 ms for `process`, `set`, `reset`; 1000 ms
+  for `create` and top-level code) is stopped: new error code 6 (`PERR_HANG`, "It got stuck in a loop, so it was
+  stopped."), the slot becomes a wire and the rest of the mix plays on. The checker runs the same guard and says
+  so (`nan-inf` with a loop hint).
+- **`watchAudioStall(ctx, opts)`** (`src/watchdog.js`): a main-thread watch for a context whose clock stopped
+  (a hang the loop guard can't see). Reports once per stall, never touches the context.
+- **Checker time limit** (Peter 2026-11-02: "add a time limit to each check"). `nc-fx-check` runs each check
+  that runs the plugin's code in a worker thread (the allocation gate in its child process, the browser check in
+  its Chromium page) and stops it after `--timeout` seconds (default 5). A stopped check fails with "Timed out
+  after 5 s: the plugin may hang (for example a regular expression that never finishes)", the remaining checks
+  still run and the exit code is 1. Before, a hang the loop guard can't see (a backtracking regular expression)
+  hung the checker for good. New fixture `test/fixtures/plugins/stuck-regex`.
+- **Stale code.** `loadPlugin`, `loadPluginFiles` and `loadListedPlugin` resolve with `stale: true` when the same
+  id and version was already loaded with different code (the worklet keeps the first until a reload). A version
+  clash throws with `err.reload === true`.
+
 **Insert plugins** (feat/plugins, Peter 2026-11-01: "Do it"):
 
 - **The contract.** A plugin is `plugin.json` (`ncPlugin: 1`, id, name, version, author, licence, params with
