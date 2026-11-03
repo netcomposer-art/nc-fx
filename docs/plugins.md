@@ -163,6 +163,13 @@ RESULT FAIL: 1 of 17 checks failed. Fix them and run again.
 Loop until every line is PASS (exit code 0). With `--json` the output is `{ ok, plugin, checks: [{ id, ok, level,
 message, fix?, data? }] }`; `level` is `pass`, `fail`, `warn` or `skip`. Exit codes: 0 pass, 1 a check failed, 2 usage.
 
+**Time limit.** Each check that runs your code runs on its own (a worker thread; `alloc` a child process; `browser`
+a Chromium page) with a time limit, 5 s by default (`--timeout <seconds>`). A check that runs past it is stopped
+and fails with "Timed out after 5 s: the plugin may hang (for example a regular expression that never finishes)";
+the other checks still run and the exit code is 1. The loop guard catches a loop that never ends (the check fails
+with a loop hint); the time limit catches the rest, such as a regular expression that backtracks for minutes. A
+plugin that is only slow on a busy machine can be given more time with `--timeout 20`.
+
 | Check | Fails when |
 |---|---|
 | `manifest` | plugin.json breaks a rule above (each problem is named). |
@@ -181,6 +188,7 @@ message, fix?, data? }] }`; `level` is `pass`, `fail`, `warn` or `skip`. Exit co
 | `alloc` | `process()` allocates (a heap-delta gate in a child process), or `set()` allocates more than 32 bytes a call. |
 | `engine` | nc-fx's real worklet engine stops the plugin. |
 | `bypass` | bypassed, the output isn't the input bit for bit (that would be an nc-fx bug). |
+| any check | it runs past the time limit (`--timeout`, default 5 s): the plugin may hang. |
 | `browser` | in headless Chromium (when Playwright is installed, or `--browser`): nc-fx's own loader can't load it into a real AudioWorklet, it's silent, or bypassed isn't bit-exact. |
 
 ## 4. Try it in the Studio

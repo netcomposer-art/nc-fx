@@ -18,6 +18,12 @@
   so (`nan-inf` with a loop hint).
 - **`watchAudioStall(ctx, opts)`** (`src/watchdog.js`): a main-thread watch for a context whose clock stopped
   (a hang the loop guard can't see). Reports once per stall, never touches the context.
+- **Checker time limit** (Peter 2026-11-02: "add a time limit to each check"). `nc-fx-check` runs each check
+  that runs the plugin's code in a worker thread (the allocation gate in its child process, the browser check in
+  its Chromium page) and stops it after `--timeout` seconds (default 5). A stopped check fails with "Timed out
+  after 5 s: the plugin may hang (for example a regular expression that never finishes)", the remaining checks
+  still run and the exit code is 1. Before, a hang the loop guard can't see (a backtracking regular expression)
+  hung the checker for good. New fixture `test/fixtures/plugins/stuck-regex`.
 - **Stale code.** `loadPlugin`, `loadPluginFiles` and `loadListedPlugin` resolve with `stale: true` when the same
   id and version was already loaded with different code (the worklet keeps the first until a reload). A version
   clash throws with `err.reload === true`.
