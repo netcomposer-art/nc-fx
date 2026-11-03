@@ -97,21 +97,31 @@ export interface LoadPluginOptions {
 }
 
 export const PLUGIN_API: 1;
-export const PLUGIN_ERRORS: Readonly<Record<1 | 2 | 3 | 4 | 5, string>>;
+export const PLUGIN_ERRORS: Readonly<Record<1 | 2 | 3 | 4 | 5 | 6, string>>;
 export function validateManifest(raw: unknown): { ok: boolean; errors: string[]; manifest: NcPluginManifestClean | null };
 export function validateRegistry(raw: unknown): { ok: boolean; errors: string[]; registry: NcPluginRegistry };
 export function pluginType(id: string): FxPluginType;
 export function pluginEntryFromManifest(manifest: NcPluginManifestClean, info?: { url?: string; listed?: boolean }): FxPluginEntry;
 /** Into the catalog (the DSP must be registered in the worklet too: loadPlugin does both). Throws for a bad manifest or another version of a loaded id. */
 export function registerPlugin(manifest: NcPluginManifest, info?: { url?: string; listed?: boolean }): FxPluginEntry;
+/**
+ * What a load resolves. `stale`: this id and version already ran on this page from other code; that code keeps playing
+ * (a worklet can't swap a module), so the page has to reload to hear the new one. A load refused because another
+ * version runs on this page rejects with an Error whose `reload` is true.
+ */
+export interface LoadedPlugin { entry: FxPluginEntry; manifest: NcPluginManifestClean; url: string; stale: boolean }
 /** Fetch, check, load into the context's AudioWorklet and register. Only on a user's action: it runs the plugin's code. */
-export function loadPlugin(ctx: BaseAudioContext, url: string | URL, opts?: LoadPluginOptions): Promise<{ entry: FxPluginEntry; manifest: NcPluginManifestClean; url: string }>;
+export function loadPlugin(ctx: BaseAudioContext, url: string | URL, opts?: LoadPluginOptions): Promise<LoadedPlugin>;
 /** The largest DSP file the contract allows: 256 KB. */
 export const MAX_DSP_BYTES: number;
 /** Load from the two files' contents (no network): for plugins on this computer. `url` is what sessions save (default `local:<id>`), never fetched. Only on a user's action. */
-export function loadPluginFiles(ctx: BaseAudioContext, files: { manifest: string | NcPluginManifest; dsp: string; dspName?: string }, opts?: { moduleUrl?: string | URL; url?: string }): Promise<{ entry: FxPluginEntry; manifest: NcPluginManifestClean; url: string }>;
-export function loadListedPlugin(ctx: BaseAudioContext, item: NcPluginListing, registryUrl: string, opts?: Omit<LoadPluginOptions, 'integrity' | 'listed' | 'expect'>): Promise<{ entry: FxPluginEntry; manifest: NcPluginManifestClean; url: string }>;
+export function loadPluginFiles(ctx: BaseAudioContext, files: { manifest: string | NcPluginManifest; dsp: string; dspName?: string }, opts?: { moduleUrl?: string | URL; url?: string }): Promise<LoadedPlugin>;
+export function loadListedPlugin(ctx: BaseAudioContext, item: NcPluginListing, registryUrl: string, opts?: Omit<LoadPluginOptions, 'integrity' | 'listed' | 'expect'>): Promise<LoadedPlugin>;
 export function fetchRegistry(url: string | URL, opts?: { fetch?: typeof fetch; base?: string }): Promise<{ registry: NcPluginRegistry; url: string; errors: string[] }>;
 export function sha256Integrity(bytes: Uint8Array | ArrayBuffer): Promise<string>;
 export function toWamDescriptor(manifest: NcPluginManifest): Record<string, string | boolean | string[]>;
 export function toWamParameterInfo(manifest: NcPluginManifest): Record<string, { id: string; label: string; type: string; defaultValue: number; minValue: number; maxValue: number; discreteStep: number; exponent: number; choices: string[]; units: string }>;
+/** The global the loop guard's checks call (defined in the worklet). */
+export const LOOP_GUARD: '__ncFxLoop';
+/** The source with a loop-guard check on every while, do-while and for(;;) condition (only inserts text). */
+export function guardLoops(src: string): string;

@@ -188,6 +188,37 @@ test('loadPluginFiles: loads plugin.json and the DSP from their text (no fetch),
   await assert.rejects(loadPluginFiles(ctx, { manifest: JSON.stringify({ ...TREMOLO, id: 'test.files', version: '2.0.0' }), dsp: 'x' }), /already loaded/);
 });
 
+test('the code that runs has the loop guard on; loading the same id again says whether its code changed (stale)', async () => {
+  const { resolveObjectURL } = await import('node:buffer');
+  const ctx = mockContext();
+  const MOD = { moduleUrl: '/nc-fx/worklet.js' };
+  const texts = [];
+  const add = ctx.audioWorklet.addModule;
+  ctx.audioWorklet.addModule = async (url) => {
+    if (String(url).startsWith('blob:')) texts.push(await resolveObjectURL(url).text());
+    return add(url);
+  };
+  const m = JSON.stringify({ ...TREMOLO, id: 'test.stale' });
+  const dsp = 'var k = 0; while (k < 3) k++; registerNcFxPlugin({});';
+  const first = await loadPluginFiles(ctx, { manifest: m, dsp }, MOD);
+  assert.equal(first.stale, false);
+  assert.equal(texts.length, 1);
+  assert.match(texts[0], /while \(__ncFxLoop\(\) && \(k < 3\)\)/);
+  assert.match(texts[0], /\/\/# sourceURL=local:test\.stale\/tremolo\.dsp\.js/);
+  assert.equal((await loadPluginFiles(ctx, { manifest: m, dsp }, MOD)).stale, false, 'same code: nothing to reload');
+  const again = await loadPluginFiles(ctx, { manifest: m, dsp: dsp + ' // changed' }, MOD);
+  assert.equal(again.stale, true, 'new code under the same id and version: reload to hear it');
+  assert.equal(texts.length, 1, 'the worklet keeps the first code');
+  const err = await loadPluginFiles(ctx, { manifest: JSON.stringify({ ...TREMOLO, id: 'test.stale', version: '1.0.1' }), dsp }, MOD).catch((e) => e);
+  assert.match(err.message, /Reload the page/);
+  assert.equal(err.reload, true);
+  const files = { '/u/plugin.json': JSON.stringify({ ...TREMOLO, id: 'test.staleurl' }), '/u/tremolo.dsp.js': dsp };
+  const u = await loadPlugin(ctx, 'http://localhost:5990/u/plugin.json', { fetch: fakeFetch(files), ...MOD });
+  assert.equal(u.stale, false);
+  const u2 = await loadPlugin(ctx, 'http://localhost:5990/u/plugin.json', { fetch: fakeFetch({ ...files, '/u/tremolo.dsp.js': dsp + '\n' }), ...MOD });
+  assert.equal(u2.stale, true, 'a localhost plugin edited and loaded again');
+});
+
 test('validateRegistry: entries need ids, versions, a manifest and sha256 for both files', () => {
   const good = { id: 'netcomposer.tremolo', name: 'Tremolo', version: '1.0.0', author: 'P', licence: 'MIT', manifest: 'tremolo/plugin.json', integrity: { manifest: 'sha256-' + 'A'.repeat(43) + '=', dsp: 'sha256-' + 'B'.repeat(43) + '=' }, checked: '2026-11-01' };
   assert.ok(validateRegistry({ v: 1, plugins: [good] }).ok);

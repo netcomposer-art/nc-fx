@@ -23,8 +23,11 @@ import vm from 'node:vm';
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, '..');
 const { validateManifest } = await import(pathToFileURL(join(root, 'src/plugin.js')).href);
+const { guardLoops } = await import(pathToFileURL(join(root, 'src/loop-guard.js')).href);
 const WORKLET = readFileSync(join(root, 'dist/worklet.js'), 'utf8');
 const BLOCK = 128;
+/** The fix for a call the loop guard stopped (src/loop-guard.js: over 100 ms in one call, 1 s in create). */
+const STUCK_FIX = 'a loop never ended (the Studio stops a plugin that loops past 100 ms in one call): make sure each while and for loop changes what its condition tests, and give it a bound (at most n samples)';
 const MIN_NORMAL_F32 = 1.1754943508222875e-38;
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -38,10 +41,32 @@ function scope(sr, dsp, file) {
   vm.runInContext(WORKLET, ctx, { filename: 'nc-fx/dist/worklet.js' });
   const calls = [];
   const real = ctx.registerNcFxPlugin;
-  ctx.registerNcFxPlugin = (def) => { calls.push(def); return real(def); };
+  ctx.registerNcFxPlugin = (def) => { calls.push(timed(def, ctx)); return real(def); };
   let error = null;
-  try { vm.runInContext(dsp, ctx, { filename: file, timeout: 5000 }); } catch (e) { error = e; }
+  // With the loop guard on, as the Studio runs it: a plugin stuck in a loop throws "stuck in a loop" instead of
+  // hanging the checker.
+  try { vm.runInContext(guardLoops(dsp), ctx, { filename: file, timeout: 5000 }); } catch (e) { error = e; }
   return { ctx, Proc: reg['nc-fx@1'], calls, error };
+}
+
+// The checker calls a plugin's create, process, set and reset itself: time each call with the worklet's loop guard,
+// as nc-fx's unit does (fixed arity: no allocation per call). Anything else on the definition passes through.
+function timed(def, g) {
+  if (!def || typeof def !== 'object' || typeof def.create !== 'function') return def;
+  const start = g.__ncFxLoopStart, end = g.__ncFxLoopEnd;
+  if (typeof start !== 'function') return def;
+  const call = (budget, fn) => { start(budget); try { return fn(); } finally { end(); } };
+  return Object.assign({}, def, {
+    create(sr) {
+      const inst = call(1000, () => def.create(sr));
+      if (!inst || typeof inst !== 'object' || typeof inst.process !== 'function') return inst;
+      const p = inst.process, st = inst.set, rs = inst.reset, w = Object.create(inst);
+      w.process = function (a, b, c, d, n) { start(100); try { return p.call(inst, a, b, c, d, n); } finally { end(); } };
+      if (typeof st === 'function') w.set = function (k, v) { start(100); try { return st.call(inst, k, v); } finally { end(); } };
+      if (typeof rs === 'function') w.reset = function () { start(100); try { return rs.call(inst); } finally { end(); } };
+      return w;
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -246,7 +271,7 @@ class Threw extends Error {}
 function guarded(id, fn) {
   try { fn(); } catch (e) {
     if (!(e instanceof Threw)) throw e;
-    report(id, false, e.message, 'process() and set() must never throw: check array bounds, and guard every value a dial can reach');
+    report(id, false, e.message, /stuck in a loop/.test(e.message) ? STUCK_FIX : 'process() and set() must never throw: check array bounds, and guard every value a dial can reach');
   }
 }
 function render(inst, L, R, block = BLOCK, onBlock) {
@@ -412,7 +437,7 @@ if (dspPath && manifestPath) {
   try {
     const out = execFileSync(process.execPath, ['--expose-gc', '--min-semi-space-size=64', '--max-semi-space-size=64', fileURLToPath(import.meta.url), '--alloc-child', dspPath, manifestPath], { encoding: 'utf8', timeout: 120000, stdio: ['ignore', 'pipe', 'pipe'] });
     const r = JSON.parse(out.trim().split('\n').pop());
-    if (r.error) report('alloc', false, `process() or set() threw "${r.error}"`, 'process() and set() must never throw');
+    if (r.error) report('alloc', false, `process() or set() threw "${r.error}"`, /stuck in a loop/.test(r.error) ? STUCK_FIX : 'process() and set() must never throw');
     else if (r.steady.median > 0) report('alloc', false, `process() allocates: about ${r.steady.median} bytes per 2000 blocks (${Math.round(r.steady.median / 2000)} per block)`, 'no new arrays or objects, closures, array methods (map, slice, push), string building or console in process(); make buffers in create()', r);
     // set() runs only when a dial moves, so V8 may run it unoptimised, which boxes a number or two (a few bytes a
     // call, like the message that carried the value). An array or object per call is more than 32 bytes.
@@ -450,7 +475,7 @@ if (dspPath && manifestPath) {
     const e = proc.port.sent.find((m) => m && m.t === 'perr');
     if (e) perr = e;
   }
-  if (perr) report('engine', false, `nc-fx stopped the plugin (code ${perr.d[1]}: ${['', 'it failed to start', 'process() threw', 'bad numbers or past +36 dBFS', 'set() threw', 'not registered'][perr.d[1]]})`, 'see the checks above; the Studio shows this on the card and bypasses the slot');
+  if (perr) report('engine', false, `nc-fx stopped the plugin (code ${perr.d[1]}: ${['', 'it failed to start', 'process() threw', 'bad numbers or past +36 dBFS', 'set() threw', 'not registered', 'stuck in a loop past its time budget'][perr.d[1]]})`, 'see the checks above; the Studio shows this on the card and bypasses the slot');
   else report('engine', true, 'runs in nc-fx\'s slot chain (the real worklet engine) without being stopped');
   if (fails.length) report('bypass', false, `bypassed output is not the input: ${fails[0]}`, 'this is the host\'s job: report it to nc-fx (an nc-fx bug)');
   else report('bypass', true, 'bypassed (bypassMode run and hold) the output is the input, bit for bit');

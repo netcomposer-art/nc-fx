@@ -32,6 +32,15 @@ for (const [name, failing] of [['nan', 'nan-inf'], ['alloc', 'alloc'], ['click',
   });
 }
 
+test('stuck: a plugin stuck in an infinite loop fails (the loop guard stops it) instead of hanging the checker', () => {
+  const t0 = Date.now();
+  const { code, out } = check('stuck');
+  assert.equal(code, 1);
+  const c = out.checks.find((x) => x.id === 'nan-inf');
+  assert.ok(c && !c.ok && /stuck in a loop/.test(c.detail ?? c.message ?? JSON.stringify(c)) && /loop/.test(c.fix), JSON.stringify(c));
+  assert.ok(Date.now() - t0 < 60000, 'it ends');
+});
+
 test('a CPU budget it cannot meet fails the cpu check', () => {
   const { code, out } = check('tremolo', '--budget-us', '0.01');
   assert.equal(code, 1);

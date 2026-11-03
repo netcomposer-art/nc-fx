@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { createFxChainDsp } from '../src/chain.js';
 import { registerNcFxPlugin, pluginCode, NC_PLUGINS } from '../src/plugin-host.js';
 import { slotProgram, newSlot } from '../src/slots.js';
+import { guardLoops } from '../src/loop-guard.js';
 import { noiseBursts } from './helpers.mjs';
 
 const SR = 48000;
@@ -20,6 +21,15 @@ registerNcFxPlugin({ id: 'test.throw', version: '1.0.0', params: [], create: () 
 registerNcFxPlugin({ id: 'test.loud', version: '1.0.0', params: [], create: () => ({ process(a, b, c, d, n) { for (let i = 0; i < n; i++) { c[i] = 100; d[i] = 100; } } }) });
 registerNcFxPlugin({ id: 'test.hot', version: '1.0.0', params: [], create: () => ({ process(a, b, c, d, n) { for (let i = 0; i < n; i++) { c[i] = a[i] * 40; d[i] = -b[i] * 40; } } }) });
 registerNcFxPlugin({ id: 'test.nocreate', version: '1.0.0', params: [], create: () => { throw new Error('no'); } });
+
+// Plugins stuck in a loop, as the Studio loads them: the file through the loop guard (src/loop-guard.js).
+const guarded = (src) => new Function('registerNcFxPlugin', guardLoops(src))(registerNcFxPlugin);
+guarded("var k = 0; registerNcFxPlugin({ id: 'test.stuck', version: '1.0.0', params: [], create: function () { return { process: function (a, b, c, d, n) { k++; while (k > 10) {} for (var i = 0; i < n; i++) { c[i] = a[i]; d[i] = b[i]; } } }; } });");
+guarded("registerNcFxPlugin({ id: 'test.swallow', version: '1.0.0', params: [], create: function () { var k = 0; return { process: function (a, b, c, d, n) { k++; if (k > 10) for (;;) { try { while (true) {} } catch (e) {} } for (var i = 0; i < n; i++) { c[i] = a[i]; d[i] = b[i]; } } }; } });");
+guarded("registerNcFxPlugin({ id: 'test.stuckcreate', version: '1.0.0', params: [], create: function () { for (;;) {} } });");
+guarded("registerNcFxPlugin({ id: 'test.stuckset', version: '1.0.0', params: ['x'], create: function () { return { set: function (k, v) { while (v > 0.5) {} }, process: function (a, b, c, d, n) { for (var i = 0; i < n; i++) { c[i] = a[i]; d[i] = b[i]; } } }; } });");
+// Busy but finite: 6000 loop turns a block (past the guard's 4096, so it reads the clock), every block, for seconds.
+guarded("registerNcFxPlugin({ id: 'test.busy', version: '1.0.0', params: [], create: function () { var acc = new Float64Array(1); return { process: function (a, b, c, d, n) { for (var t = 0; t < 6000; t++) acc[0] += t * 1e-9; for (var i = 0; i < n; i++) { c[i] = a[i]; d[i] = b[i]; } } }; } });");
 
 const name = (id) => `plugin:test.${id}@1.0.0`;
 function run(dsp, inL, inR, block = 128, onBlock) {
@@ -98,7 +108,7 @@ test('bypassed: the output is the input, bit for bit (run and hold), and switchi
   assert.ok(Math.abs(o[o.length - 1]) < 1e-6, 'fully on at the end: gain 0');
 });
 
-for (const [id, code, what] of [['nan', 3, 'NaN'], ['throw', 2, 'a throw'], ['loud', 3, 'runaway level'], ['nocreate', 1, 'create() throwing']]) {
+for (const [id, code, what] of [['nan', 3, 'NaN'], ['throw', 2, 'a throw'], ['loud', 3, 'runaway level'], ['nocreate', 1, 'create() throwing'], ['stuck', 6, 'an infinite loop in process()'], ['swallow', 6, 'an infinite loop that catches the guard\'s throw'], ['stuckcreate', 6, 'an infinite loop in create()']]) {
   test(`auto-bypass on ${what}: the slot passes its input, the chain plays on, reported once (code ${code})`, () => {
     calls = 0;
     const [L, R] = noiseBursts(SR / 2, 5);
@@ -116,6 +126,31 @@ for (const [id, code, what] of [['nan', 3, 'NaN'], ['throw', 2, 'a throw'], ['lo
     assert.ok(same(oL.subarray(SR / 4), L.subarray(SR / 4)));
   });
 }
+
+test('loop guard: an infinite loop in set() (a dial) stops the plugin (code 6), the chain plays on', () => {
+  const [L, R] = noiseBursts(SR / 4, 9);
+  const dsp = chain([[name('stuckset'), [[0, 1], [1, 0.2]]]]);
+  const errs = new Int32Array(36);
+  let got = null;
+  const t0 = Date.now();
+  const [oL] = run(dsp, L, R, 128, (b) => {
+    if (b === 4) dsp.set(1, 1, 0.9, 0, true);
+    if (dsp.errorsPending[0] > 0) { dsp.takeErrors(errs); got = [errs[0], errs[1]]; }
+  });
+  if (dsp.errorsPending[0] > 0) { dsp.takeErrors(errs); got = [errs[0], errs[1]]; }
+  assert.deepEqual(got, [1, 6]);
+  assert.ok(Date.now() - t0 < 5000);
+  assert.ok(same(oL.subarray(SR / 8), L.subarray(SR / 8)), 'a wire after');
+});
+
+test('loop guard: a busy but finite plugin (6000 loop turns every block, seconds of it) is never stopped', () => {
+  const [L, R] = noiseBursts(SR * 4, 11);
+  const dsp = chain([[name('busy'), [[0, 1]]]]);
+  const t0 = Date.now();
+  const [oL] = run(dsp, L, R);
+  assert.equal(dsp.errorsPending[0], 0, `stopped after ${Date.now() - t0} ms`);
+  assert.ok(close(oL, L));
+});
 
 test('the ceiling: a plugin louder than +12 dBFS (but not runaway) is held at +-4 and keeps playing, not reported', () => {
   const [L, R] = noiseBursts(SR / 4, 7);

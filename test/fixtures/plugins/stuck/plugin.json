@@ -1,0 +1,48 @@
+{
+  "ncPlugin": 1,
+  "id": "test.stuck",
+  "name": "Bad stuck",
+  "version": "1.0.0",
+  "author": "Peter Semmelhack",
+  "licence": "MIT",
+  "description": "Gets stuck in an infinite loop once the rate is past 10 Hz.",
+  "website": "https://github.com/netcomposer-art/nc-plugin-template",
+  "keywords": [
+    "tremolo",
+    "modulation"
+  ],
+  "dsp": "bad.dsp.js",
+  "params": [
+    {
+      "id": "rate",
+      "label": "Rate",
+      "type": "float",
+      "minValue": 0.1,
+      "maxValue": 20,
+      "defaultValue": 5,
+      "discreteStep": 0.1,
+      "units": "Hz"
+    },
+    {
+      "id": "depth",
+      "label": "Depth",
+      "type": "float",
+      "minValue": 0,
+      "maxValue": 100,
+      "defaultValue": 50,
+      "discreteStep": 1,
+      "units": "%"
+    },
+    {
+      "id": "shape",
+      "label": "Shape",
+      "type": "choice",
+      "choices": [
+        "Sine",
+        "Triangle",
+        "Square"
+      ],
+      "defaultValue": 0
+    }
+  ]
+}

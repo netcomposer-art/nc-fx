@@ -1710,7 +1710,12 @@ function createFxDsp(sampleRate, opts) {
 //   - a ceiling: a plugin's output is held within +-4 (+12 dBFS, the checker's level limit), so a plugin that gets
 //     too loud, but not loud enough to count as runaway, can't blast the rest of the chain. A plugin that passes
 //     nc-fx-check never reaches it, so it changes nothing for one that does;
-//   - subnormal samples from the plugin are flushed to 0 (below 1e-30), so a decaying tail can't slow the chain.
+//   - subnormal samples from the plugin are flushed to 0 (below 1e-30), so a decaying tail can't slow the chain;
+//   - a loop guard: the main thread adds a check to every loop in the plugin's file (src/loop-guard.js), the global
+//     __ncFxLoop() below. A call into the plugin that keeps looping past its time budget (process, set, reset:
+//     PLUGIN_TIME_BUDGET_MS; create: PLUGIN_CREATE_BUDGET_MS) throws there, and the unit stops calling it
+//     (PERR_HANG): a plugin stuck in an infinite loop is bypassed and the chain plays on. The check is a countdown;
+//     it reads the clock once every 4096 loop turns, so a plugin's ordinary loops cost a decrement each.
 // Every buffer is made when the unit is made (on the control path); run() allocates nothing.
 
 /** Plugin unit type codes start here (after the 12 built-in units, UNIT_TYPES). */
@@ -1722,10 +1727,39 @@ var PLUGIN_MAX_PARAMS = 15;
 /** ctl() op: the unit's error code (0 none). */
 var OP_ERR = 13;
 /** Error codes (the main thread names them: src/plugin.js PLUGIN_ERRORS). */
-var PERR_CREATE = 1, PERR_PROCESS = 2, PERR_OUTPUT = 3, PERR_SET = 4, PERR_MISSING = 5;
+var PERR_CREATE = 1, PERR_PROCESS = 2, PERR_OUTPUT = 3, PERR_SET = 4, PERR_MISSING = 5, PERR_HANG = 6;
 var RUNAWAY = 64;
 /** The most a plugin's output may be (+12 dBFS): louder samples are held there. */
 var PLUGIN_CEILING = 4;
+/** The longest one call into a plugin (process, set, reset) may keep looping, in ms, before it is stopped. */
+var PLUGIN_TIME_BUDGET_MS = 100;
+/** The same for create(sampleRate) and the file's own top level (tables built at load), in ms. */
+var PLUGIN_CREATE_BUDGET_MS = 1000;
+var LOOP_TURNS = 4096;
+// The loop guard's state: 0 turns left before the next clock read, 1 when this stretch of looping started (ms, 0
+// none yet), 2 the budget (ms), 3 tripped (1: every check throws until the call returns), 4 the last clock read.
+var LOOP = new Float64Array(5);
+LOOP[0] = LOOP_TURNS; LOOP[2] = PLUGIN_CREATE_BUDGET_MS;
+var LOOP_STUCK = new Error('nc-fx plugin: stuck in a loop (it ran past its time budget)');
+/**
+ * The check guarded code calls on each loop turn (src/loop-guard.js). Returns true; throws once the current call has
+ * looped past its budget. Allocates nothing. Outside a call (a file's top level) a gap of over 250 ms between clock
+ * reads starts a new stretch, so a later file's loops aren't timed from an earlier one's.
+ */
+function ncFxLoop() {
+  if (LOOP[3] !== 0) throw LOOP_STUCK;
+  if (--LOOP[0] > 0) return true;
+  LOOP[0] = LOOP_TURNS;
+  var now = Date.now();
+  if (LOOP[1] === 0 || now - LOOP[4] > 250) LOOP[1] = now;
+  LOOP[4] = now;
+  if (now - LOOP[1] > LOOP[2]) { LOOP[3] = 1; throw LOOP_STUCK; }
+  return true;
+}
+/** Start timing a call into a plugin (budget in ms). */
+function loopStart(budget) { LOOP[0] = LOOP_TURNS; LOOP[1] = 0; LOOP[2] = budget; LOOP[3] = 0; }
+/** End it: 1 if the call was stopped for looping too long, else 0. Back to the top-level budget. */
+function loopEnd() { var t = LOOP[3]; LOOP[0] = LOOP_TURNS; LOOP[1] = 0; LOOP[2] = 1000; LOOP[3] = 0; return t; }
 var PLUGIN_ID = /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/;
 
 /** Registered plugins, in registration order (code = PLUGIN_BASE + index). */
@@ -1761,6 +1795,12 @@ function pluginCode(name) {
   return -1;
 }
 if (typeof globalThis !== 'undefined' && typeof globalThis.registerNcFxPlugin !== 'function') globalThis.registerNcFxPlugin = registerNcFxPlugin;
+if (typeof globalThis !== 'undefined' && typeof globalThis.__ncFxLoop !== 'function') {
+  globalThis.__ncFxLoop = ncFxLoop;
+  // For hosts that call a plugin themselves (nc-fx-check): time one call as the unit does.
+  globalThis.__ncFxLoopStart = loopStart;
+  globalThis.__ncFxLoopEnd = loopEnd;
+}
 
 /**
  * The unit for registered plugin `code` on env E (units.js). Allocates: control path only. Besides the unit
@@ -1776,13 +1816,19 @@ function createPluginUnit(E, code) {
   var A = new Float64Array(5);
   var P = new Float64Array(np);
   var inst = null;
+  loopStart(PLUGIN_CREATE_BUDGET_MS);
   try { inst = def.create(sr); } catch (e) { inst = null; }
-  if (!inst || typeof inst.process !== 'function') { inst = null; A[2] = PERR_CREATE; }
+  var hung = loopEnd();
+  if (!inst || typeof inst.process !== 'function' || hung) { inst = null; A[2] = hung ? PERR_HANG : PERR_CREATE; }
   var hasSet = !!(inst && typeof inst.set === 'function'), hasReset = !!(inst && typeof inst.reset === 'function');
   function fail(code) { if (A[2] === 0) A[2] = code; }
+  // Stuck in a loop: that reason wins over the throw that stopped it (the guard's), even if the plugin caught it.
+  function hang() { if (A[2] === 0 || A[2] === PERR_PROCESS || A[2] === PERR_SET) A[2] = PERR_HANG; }
   function reset() {
     if (inst === null || A[2] !== 0 || !hasReset) return;
+    loopStart(100); // PLUGIN_TIME_BUDGET_MS
     try { inst.reset(); } catch (e) { fail(PERR_PROCESS); }
+    if (loopEnd()) hang();
   }
   function set(k, snap) {
     if (k < 0) return false;
@@ -1799,7 +1845,9 @@ function createPluginUnit(E, code) {
     if (v !== v || v === Infinity || v === -Infinity) return false;
     P[k - 1] = v;
     if (inst !== null && A[2] === 0 && hasSet) {
+      loopStart(100); // PLUGIN_TIME_BUDGET_MS
       try { inst.set(keys[k - 1], v); } catch (e) { fail(PERR_SET); }
+      if (loopEnd()) hang();
     }
     return true;
   }
@@ -1809,7 +1857,9 @@ function createPluginUnit(E, code) {
     if (E.hold && t === 0 && b <= 0.001) { A[3] = 1; A[0] = b + (t - b) * k; return; }
     if (inst === null || A[2] !== 0) { A[0] = b; for (j = 0; j < n; j++) b += (t - b) * k; A[0] = b; return; }
     for (j = 0; j < n; j++) { iL[j] = BL[from + j]; iR[j] = BR[from + j]; oL[j] = 0; oR[j] = 0; }
+    loopStart(100); // PLUGIN_TIME_BUDGET_MS, as a literal
     try { inst.process(iL, iR, oL, oR, n); } catch (e) { fail(PERR_PROCESS); }
+    if (loopEnd()) hang();
     if (A[2] === 0) {
       for (j = 0; j < n; j++) {
         x = oL[j]; y = oR[j];
