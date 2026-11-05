@@ -14,7 +14,8 @@ import { noiseBursts } from './helpers.mjs';
 const SR = 48000;
 const W = astridWorklet(SR);
 const H = await astridHacks();
-const ALL = CATALOG.map((e) => e.type);
+// ASTRID's hacks: every catalog type but nc-fx's own (Hall, Ensemble: test/hall-ensemble.test.mjs).
+const ALL = CATALOG.filter((e) => !e.own).map((e) => e.type);
 
 /** nc-fx's slot engine loaded with a state, as createFxCore does it (adds, snapped params, an immediate order). */
 function ncChain(state, tempo, slots = 3) {

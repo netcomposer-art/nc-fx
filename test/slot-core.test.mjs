@@ -125,7 +125,7 @@ test('slots: API shape, limits and notifications', async () => {
   seen.length = 0;
   fx.setParam('drive-1', 'curve', 0);
   assert.deepEqual(seen, [['drive-1', 'curve', 0], ['drive-1', 'drive_db', 7]]);
-  assert.deepEqual(CATALOG_MENU, ['delay', 'plate', 'flanger', 'chorus', 'phaser', 'eq', 'drive', 'compressor', 'width']);
+  assert.deepEqual(CATALOG_MENU, ['delay', 'plate', 'hall', 'ensemble', 'flanger', 'chorus', 'phaser', 'eq', 'drive', 'compressor', 'width']);
 });
 
 test('slots: calls before the worklet is ready are queued and replayed in order (and a long queue folds)', async () => {

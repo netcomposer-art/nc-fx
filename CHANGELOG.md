@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+**Hall and Ensemble** (Peter's mockup, 2026-11-05): two new effects, nc-fx's own (not ASTRID's), in Add right after
+Reverb (Delay, Reverb, Hall, Ensemble, Flanger, Chorus, ...). Catalog entries carry `own: true`; ASTRID's saves leave
+them out and list them in `lossy` (`toAstridHacks`), as plugins.
+
+- **Hall** (`hall`): Size, Decay 0.5–12 s, Pre-delay 0–250 ms, Tone (shown as a frequency), Mix; under More: Low cut,
+  Width, Motion. Defaults Size 60 %, Decay 3.5 s, Pre-delay 20 ms, Tone 7.0 kHz, Mix 25 %, Low cut 120 Hz, Width 100 %,
+  Motion 30 %. A diffused, modulated 8-line FDN; Decay is the T60 at 500 Hz.
+- **Ensemble** (`ensemble`): Rate, Depth, Width, Mix 50 %; under More: Voices (3 or 6), Vibrato. A string-machine
+  ensemble: slow and fast LFOs, voices 120° apart.
+- Both always sleep when fully bypassed (as `bypassMode: 'hold'`, whatever the chain's mode) and start from silence
+  when switched back on. Engaging either at its default mix changes the level by under 0.5 dB (pads, noise).
+- Unit codes 12 (`hall`) and 13 (`ensemble`); plugin unit codes now start at 14 (`PLUGIN_BASE`; run-time only,
+  never saved).
+
 **Local plugins and a ceiling** (feat/local-plugins, for the Studio's local plugins):
 
 - `loadPluginFiles(ctx, { manifest, dsp, dspName? }, { moduleUrl, url? })` loads a plugin from its two files'

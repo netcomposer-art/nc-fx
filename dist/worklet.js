@@ -99,10 +99,10 @@ var L_PRE = 0, L_IN = 1, L_AP1 = 5, L_D1 = 7, L_AP2 = 9, L_D2 = 11, N_LINES = 13
 var PLATE_IG = [0.75, 0.75, 0.625, 0.625];
 
 /** Unit type codes (the engine's numbers for the catalog's types). */
-var UNIT = { drive: 0, delay: 1, plate: 2, eq: 3, compressor: 4, width: 5, flanger: 6, chorus: 7, phaser: 8, lowpass: 9, highpass: 10, bandpass: 11 };
-var UNIT_TYPES = ['drive', 'delay', 'plate', 'eq', 'compressor', 'width', 'flanger', 'chorus', 'phaser', 'lowpass', 'highpass', 'bandpass'];
+var UNIT = { drive: 0, delay: 1, plate: 2, eq: 3, compressor: 4, width: 5, flanger: 6, chorus: 7, phaser: 8, lowpass: 9, highpass: 10, bandpass: 11, hall: 12, ensemble: 13 };
+var UNIT_TYPES = ['drive', 'delay', 'plate', 'eq', 'compressor', 'width', 'flanger', 'chorus', 'phaser', 'lowpass', 'highpass', 'bandpass', 'hall', 'ensemble'];
 /** Params per unit (k = 0 is the on flag). */
-var UNIT_NPARAMS = [8, 10, 6, 6, 6, 3, 5, 5, 6, 2, 3, 4];
+var UNIT_NPARAMS = [8, 10, 6, 6, 6, 3, 5, 5, 6, 2, 3, 4, 9, 7];
 
 /** ctl() ops. Results are small integers (1 = true), never doubles. */
 var OP_NONE = 0, OP_CLEAR = 1, OP_FADE_BEGIN = 2, OP_FADE_WORK = 3, OP_FADE_DONE = 4, OP_FADE_IDLE = 5,
@@ -1313,6 +1313,372 @@ function unitPass(E, hp) {
 function unitHighpass(E) { return unitPass(E, true); }
 function unitBandpass(E) { return unitPass(E, false); }
 
+// ---------------------------------------------------------------------------------------------------------------
+// nc-fx's own effects (not ASTRID's: no parity reference). Both always sleep when fully bypassed (as bypassMode
+// 'hold', whatever the chain's mode: a hall costs the most of any effect), and start from silence when switched
+// back on.
+
+// Hall: a large, smooth hall. Pre-delay, then four series all-passes per side (diffusion, so a hit becomes a wash,
+// not echoes), into an 8-line feedback delay network: a Hadamard mix (lossless, every line feeds every line), a
+// one-pole low-pass per line (Tone: the tail darkens as it decays, as in a real room), a gain per line for the Decay
+// time (RT60) at that line's length, and each line's length swept by its own slow sine (Motion), so the modes keep
+// moving and no metallic ring builds up. The wet then has a 12 dB/oct low cut and a mid/side width; the mix is
+// equal-power, as the plate's. k: 0 on, 1 size 0-1, 2 decay s (0.5-12), 3 pre-delay s (0-0.25), 4 tone Hz
+// (1000-20000), 5 mix 0-1, 6 low cut Hz (0 off, up to 1000), 7 width 0-1, 8 motion 0-1.
+// Line lengths at size 1 in ms (no two share a factor that matters; the shortest 38 ms, the longest 97 ms); size 0
+// is 40% of them. Diffusers: Dattorro's input lengths at 48 kHz, a little different per side.
+var HALL_MS = [38.3, 44.9, 51.7, 57.1, 64.3, 72.9, 83.9, 97.1];
+var HALL_DIFF = [229, 173, 611, 447, 241, 163, 593, 461];
+var HALL_DIFF_G = [0.75, 0.75, 0.625, 0.625];
+// LFO rates (Hz) of the line sweeps, spread so they never line up; their phases start spread too.
+var HALL_LFO = [0.11, 0.17, 0.23, 0.29, 0.37, 0.43, 0.53, 0.61];
+var HALL_MOD_S = 0.0004; // the sweep at Motion 100%: +-0.4 ms (a few cents of drift on the tail)
+var HALL_EARLY = 0.35;    // the diffused input in the output (the hall's first ~30 ms)
+var N_HALL = 18;          // buffers: 0-7 the lines, 8-15 the diffusers (8-11 left, 12-15 right), 16-17 pre-delay L, R
+var HALL_WET = 0.98;      // the wet's level: at the defaults the wet alone is as loud as the dry, so the equal-power mix keeps the level
+function unitHall(E) {
+  var sr = E.sr, IO = E.IO;
+  var HB = [], HN = new Int32Array(N_HALL), HW = new Int32Array(N_HALL);
+  var kr = sr / 48000, i0;
+  for (i0 = 0; i0 < N_HALL; i0++) {
+    var n0;
+    if (i0 < 8) n0 = Math.ceil((HALL_MS[i0] / 1000 + HALL_MOD_S) * sr) + 8;
+    else if (i0 < 16) n0 = Math.ceil(HALL_DIFF[i0 - 8] * kr) + 2;
+    else n0 = Math.ceil(0.25 * sr) + 8;
+    HN[i0] = n0;
+    HB.push(new Float32Array(n0));
+  }
+  // H: 0 on, 1 onT, 2 sleep (0 awake, 1 clearing, 2 clear), 3 sizeS, 4 sizeT, 5 decayS, 6 decayT, 7 preS (samples),
+  // 8 preT, 9 toneS (Hz), 10 toneT, 11 mixS, 12 mixT, 13 lowCutT (Hz), 14 widthS, 15 widthT, 16 motionS, 17 motionT,
+  // 18 tick (coefficients every 16 samples), 19 damping coef, 20 low-cut coef, 21-24 HP states (L1, R1, L2, R2),
+  // 25 clear buffer, 26 clear position, 27 fade-clear buffer, 28 fade-clear position, 29 lowCutS, 30 wet level
+  var H = new Float64Array(31);
+  // Per line: G gain, LEN length (samples, before the sweep), Z damping state, C/S the sweep's sine (rotating), CW/SW
+  // its step; X the lines' outputs this sample; Y scratch for the mix.
+  var G = new Float64Array(8), LEN = new Float64Array(8), Z = new Float64Array(8);
+  var C = new Float64Array(8), S = new Float64Array(8), CW = new Float64Array(8), SW = new Float64Array(8);
+  var X = new Float64Array(8), Y = new Float64Array(8);
+  for (i0 = 0; i0 < 8; i0++) { CW[i0] = Math.cos(TWOPI * HALL_LFO[i0] / sr); SW[i0] = Math.sin(TWOPI * HALL_LFO[i0] / sr); }
+  function init() {
+    H.fill(0);
+    H[3] = 0.6; H[4] = 0.6; H[5] = 3.5; H[6] = 3.5; H[7] = 0.02 * sr; H[8] = H[7]; H[9] = 7000; H[10] = 7000;
+    H[11] = 0.25; H[12] = 0.25; H[13] = 120; H[29] = 120; H[14] = 1; H[15] = 1; H[16] = 0.3; H[17] = 0.3;
+    phases();
+    coefs();
+  }
+  function phases() {
+    for (var i = 0; i < 8; i++) { C[i] = Math.cos(i * 0.785398); S[i] = Math.sin(i * 0.785398); Z[i] = 0; }
+  }
+  /** Lengths, gains and filter coefficients from the smoothed dials (every 16 samples, and on a snap). */
+  function coefs() {
+    var sc = 0.4 + 0.6 * H[3], t60 = H[5] * sr, i;
+    // The damping low-pass also takes a little off every pass at mid frequencies: the gains make that back at 500 Hz,
+    // so Decay is the time a mid sound takes to fall 60 dB; lows ring at most twice as long, highs die sooner.
+    var a = 1 - Math.exp(-TWOPI * H[9] / sr), wr = TWOPI * 500 / sr;
+    var re = 1 - (1 - a) * Math.cos(wr), im = (1 - a) * Math.sin(wr), mag = a / Math.sqrt(re * re + im * im), g, cap;
+    for (i = 0; i < 8; i++) {
+      LEN[i] = HALL_MS[i] * 0.001 * sr * sc;
+      g = Math.exp(-6.907755278982137 * LEN[i] / t60) / mag;
+      cap = Math.exp(-6.907755278982137 * LEN[i] / (2 * t60));
+      G[i] = g < cap ? g : cap;
+    }
+    H[19] = a;
+    H[20] = Math.exp(-TWOPI * H[29] / sr);
+    // Longer decays ring louder; this takes back about half of that (in dB), so the default is the reference.
+    H[30] = HALL_WET * Math.pow(3.5 / H[5], 0.25);
+  }
+  init();
+  function clearState() {
+    for (var i = 0; i < N_HALL; i++) HW[i] = 0;
+    for (i = 0; i < 8; i++) Z[i] = 0;
+    H[21] = 0; H[22] = 0; H[23] = 0; H[24] = 0; H[25] = 0; H[26] = 0;
+  }
+  function clear() { for (var i = 0; i < N_HALL; i++) HB[i].fill(0); clearState(); }
+  function set(k, snap) {
+    var x;
+    if (k === 0) { x = E.V[0] ? 1 : 0; E.V[0] = x; if (x) { if (H[2] !== 0) clear(); H[2] = 0; } H[1] = x; if (snap) H[0] = x; return true; }
+    switch (k) {
+      case 1: if (!(E.V[1] = 0, E.V[2] = 1, take(E))) return false; H[4] = E.V[0]; if (snap) { H[3] = H[4]; coefs(); } return true;
+      case 2: if (!(E.V[1] = 0.5, E.V[2] = 12, take(E))) return false; H[6] = E.V[0]; if (snap) { H[5] = H[6]; coefs(); } return true;
+      case 3: if (!(E.V[1] = 0, E.V[2] = 0.25, take(E))) return false; H[8] = E.V[0] * sr; if (snap) H[7] = H[8]; return true;
+      case 4: if (!(E.V[1] = 1000, E.V[2] = 20000, take(E))) return false; H[10] = E.V[0]; if (snap) { H[9] = H[10]; coefs(); } return true;
+      case 5: if (!(E.V[1] = 0, E.V[2] = 1, take(E))) return false; H[12] = E.V[0]; if (snap) H[11] = H[12]; return true;
+      case 6: if (!(E.V[1] = 0, E.V[2] = 1000, take(E))) return false; H[13] = E.V[0]; if (snap) { H[29] = H[13]; coefs(); } return true;
+      case 7: if (!(E.V[1] = 0, E.V[2] = 1, take(E))) return false; H[15] = E.V[0]; if (snap) H[14] = H[15]; return true;
+      case 8: if (!(E.V[1] = 0, E.V[2] = 1, take(E))) return false; H[17] = E.V[0]; if (snap) H[16] = H[17]; return true;
+    }
+    return false;
+  }
+  var H0 = H.slice();
+  function ctl(op, a) {
+    var li, pos, n, end, left;
+    switch (op) {
+      case 12: H.set(H0); clear(); phases(); coefs(); return 1;
+      case 1: clear(); return 1;
+      case 2: H[27] = 0; H[28] = 0; return 1;
+      case 3:
+        while (a > 0 && H[27] < N_HALL) {
+          li = H[27] | 0; pos = H[28] | 0; n = HN[li];
+          end = pos + a;
+          if (end > n) end = n;
+          HB[li].fill(0, pos, end);
+          a -= end - pos;
+          if (end >= n) { H[27] = li + 1; H[28] = 0; } else H[28] = end;
+        }
+        return a;
+      case 4: clearState(); return 1;
+      case 5: return H[27] >= N_HALL ? 1 : 0;
+      case 6: // asleep: clear the tail a piece per block, so switching back on starts from silence and no block pays for it all
+        left = CLEAR_CHUNK;
+        while (H[2] === 1 && left > 0) {
+          li = H[25] | 0; pos = H[26] | 0; n = HN[li];
+          end = pos + left;
+          if (end > n) end = n;
+          HB[li].fill(0, pos, end);
+          left -= end - pos;
+          if (end >= n) {
+            if (li + 1 >= N_HALL) { clearState(); H[2] = 2; break; }
+            H[25] = li + 1; H[26] = 0;
+          } else H[26] = end;
+        }
+        return 1;
+      case 11: settle(H, 0); settle(H, 3); settle(H, 5); settle(H, 9); settle(H, 11); settle(H, 14); settle(H, 16); return 1;
+    }
+    return op === 3 ? a : 0;
+  }
+  function step() {
+    var xL = IO[0], xR = IO[1];
+    var kf = E.kFast, ks = E.kSlow, i, j, d, p, q, f, v, y, w, buf, n;
+    H[0] += (H[1] - H[0]) * kf;
+    var b = H[0];
+    if (H[1] === 0 && b <= 0.001) { if (H[2] === 0) { H[2] = 1; H[25] = 0; H[26] = 0; } return; }
+    H[3] += (H[4] - H[3]) * ks;
+    H[5] += (H[6] - H[5]) * kf;
+    H[7] += (H[8] - H[7]) * kf;
+    H[9] += (H[10] - H[9]) * kf;
+    H[11] += (H[12] - H[11]) * kf;
+    H[14] += (H[15] - H[14]) * kf;
+    H[16] += (H[17] - H[16]) * kf;
+    H[29] += (H[13] - H[29]) * kf;
+    if (H[29] < 0.01 && H[13] === 0) H[29] = 0;
+    H[18] += 1;
+    if (H[18] >= 16) { H[18] = 0; coefs(); }
+    var tg = E.FC[1];
+    // Pre-delay (integer read is enough at these lengths), both sides.
+    var pre = H[7] | 0, dl, dr;
+    for (j = 0; j < 2; j++) {
+      buf = HB[16 + j]; n = HN[16 + j]; w = HW[16 + j];
+      v = (j === 0 ? xL : xR) * tg;
+      buf[w] = (v > -1e-15 && v < 1e-15) ? 0 : v;
+      p = w - pre;
+      if (p < 0) p += n;
+      y = buf[p];
+      HW[16 + j] = w + 1 >= n ? 0 : w + 1;
+      // Four series all-passes (Schroeder lattice, as the plate's): x - g * d into the line, g * v + d out.
+      for (i = 0; i < 4; i++) {
+        buf = HB[8 + 4 * j + i]; n = HN[8 + 4 * j + i]; w = HW[8 + 4 * j + i];
+        d = buf[w + 1 >= n ? 0 : w + 1]; // the oldest sample: a delay of n - 1
+        v = y - HALL_DIFF_G[i] * d;
+        if (v > -1e-15 && v < 1e-15) v = 0;
+        buf[w] = v;
+        y = HALL_DIFF_G[i] * v + d;
+        HW[8 + 4 * j + i] = w + 1 >= n ? 0 : w + 1;
+      }
+      if (j === 0) dl = y; else dr = y;
+    }
+    // The network: read each line at its swept length (linear interpolation), damp, scale by its decay gain.
+    var depth = H[16] * HALL_MOD_S * sr, damp = H[19];
+    for (i = 0; i < 8; i++) {
+      // The sweep: a rotating sine (renormalised below).
+      var c = C[i], s = S[i];
+      C[i] = c * CW[i] - s * SW[i];
+      S[i] = s * CW[i] + c * SW[i];
+      buf = HB[i]; n = HN[i]; w = HW[i];
+      d = LEN[i] + depth * S[i];
+      if (d < 2) d = 2;
+      if (d > n - 2) d = n - 2;
+      p = w - d;
+      if (p < 0) p += n;
+      j = p | 0;
+      f = p - j;
+      y = buf[j] + (buf[j + 1 >= n ? 0 : j + 1] - buf[j]) * f;
+      X[i] = y;
+      v = Z[i] + (y - Z[i]) * damp;
+      if (v > -LP_FLUSH && v < LP_FLUSH) v = 0;
+      Z[i] = v;
+      Y[i] = v * G[i];
+    }
+    // Hadamard 8 (three butterfly stages), scaled by 1 / sqrt(8): lossless.
+    for (i = 0; i < 8; i += 2) { p = Y[i]; q = Y[i + 1]; Y[i] = p + q; Y[i + 1] = p - q; }
+    for (i = 0; i < 8; i += 4) { p = Y[i]; q = Y[i + 2]; Y[i] = p + q; Y[i + 2] = p - q; p = Y[i + 1]; q = Y[i + 3]; Y[i + 1] = p + q; Y[i + 3] = p - q; }
+    for (i = 0; i < 4; i++) { p = Y[i]; q = Y[i + 4]; Y[i] = p + q; Y[i + 4] = p - q; }
+    for (i = 0; i < 8; i++) {
+      v = Y[i] * 0.35355339059327373 + ((i & 1) === 0 ? dl : dr) * ((i & 2) === 0 ? 0.5 : -0.5);
+      if (v > -1e-15 && v < 1e-15) v = 0;
+      w = HW[i];
+      HB[i][w] = v;
+      HW[i] = w + 1 >= HN[i] ? 0 : w + 1;
+    }
+    // Each time line 1 wraps, pull the sines back onto the unit circle (rounding drifts them slowly).
+    if (HW[0] === 0) for (i = 0; i < 8; i++) { p = 1.5 - 0.5 * (C[i] * C[i] + S[i] * S[i]); C[i] *= p; S[i] *= p; }
+    // Two decorrelated outputs (orthogonal sign patterns over the lines), plus the diffused input itself, so the
+    // hall starts right after the pre-delay instead of after its shortest line.
+    var yl = (X[0] - X[1] + X[2] - X[3] + X[4] - X[5] + X[6] - X[7]) * 0.35355339059327373 + HALL_EARLY * dl;
+    var yr = (X[0] + X[1] - X[2] - X[3] + X[4] + X[5] - X[6] - X[7]) * 0.35355339059327373 + HALL_EARLY * dr;
+    // Low cut: two one-pole high-passes (12 dB/oct; hp = x - lp, lp += (1 - a) * (x - lp)); off once its glide lands at 0.
+    var cut = H[29] !== 0 ? H[20] : 1;
+    var lpL1 = H[21], lpR1 = H[22], lpL2 = H[23], lpR2 = H[24];
+    if (cut !== 1) {
+      lpL1 += (1 - cut) * (yl - lpL1); yl -= lpL1;
+      lpR1 += (1 - cut) * (yr - lpR1); yr -= lpR1;
+      lpL2 += (1 - cut) * (yl - lpL2); yl -= lpL2;
+      lpR2 += (1 - cut) * (yr - lpR2); yr -= lpR2;
+      if (lpL1 > -LP_FLUSH && lpL1 < LP_FLUSH) lpL1 = 0;
+      if (lpR1 > -LP_FLUSH && lpR1 < LP_FLUSH) lpR1 = 0;
+      if (lpL2 > -LP_FLUSH && lpL2 < LP_FLUSH) lpL2 = 0;
+      if (lpR2 > -LP_FLUSH && lpR2 < LP_FLUSH) lpR2 = 0;
+    } else { lpL1 = 0; lpR1 = 0; lpL2 = 0; lpR2 = 0; }
+    H[21] = lpL1; H[22] = lpR1; H[23] = lpL2; H[24] = lpR2;
+    // Width (mid/side on the wet), level, then the equal-power mix.
+    var mid = 0.5 * (yl + yr), side = 0.5 * (yl - yr) * H[14], lev = H[30] * tg;
+    yl = (mid + side) * lev; yr = (mid - side) * lev;
+    var m = H[11];
+    var dg = Math.cos(m * HALFPI), wg = Math.sin(m * HALFPI);
+    var oL = dg * xL + wg * yl, oR = dg * xR + wg * yr;
+    if (b >= 0.999) { IO[0] = oL; IO[1] = oR; return; }
+    var xt = (b - 0.001) * XF, xs = xt * xt * (3 - 2 * xt);
+    var dryG = Math.cos(xs * HALFPI), wetG = Math.sin(xs * HALFPI);
+    IO[0] = dryG * xL + wetG * oL;
+    IO[1] = dryG * xR + wetG * oR;
+  }
+  return { type: 12, step: step, set: set, ctl: ctl, retarget: noRetarget, reset: function () { ctl(12, 0); } };
+}
+
+// Ensemble: the string machine's chorus (the Solina's, and the ARP and Roland ensembles after it). Three voices of
+// the input (each side through its own line, so a stereo sound keeps its image), each a short delay (7 ms) swept by a slow LFO (Rate) plus a fast one (Vibrato, about 18 times faster,
+// at most 12 Hz), the voices a third of a cycle (120 degrees) apart, panned left, centre, right by Width. Six voices
+// add a second set, longer (9.5 ms) and 60 degrees on, panned the other way round: thicker. The wet has a gentle low
+// cut (100 Hz, as the string machines' delay lines did), and the mix is equal-power, so turning it on at 50% keeps
+// the level.
+// k: 0 on, 1 rate Hz (0.01-20), 2 depth 0-1, 3 width 0-1, 4 mix 0-1, 5 voices (3 or 6), 6 vibrato 0-1.
+var ENS_BASE_MS = [7, 9.5];
+var ENS_SLOW_MS = 3;      // the slow sweep at depth 100%: +-3 ms
+var ENS_FAST_MS = 0.35;   // the fast one at vibrato 100%: +-0.35 ms
+var ENS_WET = 1.15;      // the wet's level: at the defaults, turning it on keeps the level (pads, noise) within 0.5 dB
+var ENS_HP = 100;        // the wet's low cut (Hz): the voices' lows add up in phase, the dry's bass stays clean
+var ENS_PAN = [-1, 0, 1, 1, -0.5, -1];
+var ENS_SIN = [0, 0.8660254037844386, -0.8660254037844386, 0.5, 1, -0.5]; // sin and cos of each voice's offset:
+var ENS_COS = [1, -0.5, -0.5, 0.8660254037844386, 0, -0.8660254037844387]; // 0, 120, 240, then 60, 180... on (60, 180, 300 deg)
+function unitEnsemble(E) {
+  var sr = E.sr, IO = E.IO, D = new Float64Array(2);
+  var n = Math.ceil((ENS_BASE_MS[1] + ENS_SLOW_MS + ENS_FAST_MS + 2) * 0.001 * sr) + 4;
+  var bufL = new Float32Array(n), bufR = new Float32Array(n); // each side has its own line, so stereo stays stereo
+  // A: 0 on, 1 onT, 2 slept, 3 rateS, 4 rateT, 5 depthS, 6 depthT, 7 widthS, 8 widthT, 9 mixS, 10 mixT, 11 voices
+  // (target, 3 or 6), 12 vibS, 13 vibT, 14 w, 15 tick, 16 six (0..1, the second set's gain), 17-18 slow cos/sin,
+  // 19-20 slow step cos/sin, 21-22 fast cos/sin, 23-24 fast step cos/sin, 25 left norm, 26 right norm, 27-28 the wet's
+  // low-cut states (L, R), 29 its coefficient
+  var A = new Float64Array(30);
+  var PL = new Float64Array(6), PR = new Float64Array(6); // each voice's pan gains
+  function init() {
+    A.fill(0);
+    var r = 0.05 * Math.pow(200, 0.35);
+    A[3] = r; A[4] = r; A[5] = 0.6; A[6] = 0.6; A[7] = 0.8; A[8] = 0.8; A[9] = 0.5; A[10] = 0.5; A[11] = 3;
+    A[12] = 0.2; A[13] = 0.2; A[29] = 1 - Math.exp(-TWOPI * ENS_HP / sr);
+    clear();
+    coefs();
+  }
+  function clear() { bufL.fill(0); bufR.fill(0); A[14] = 0; A[27] = 0; A[28] = 0; A[17] = 1; A[18] = 0; A[21] = 1; A[22] = 0; }
+  /** LFO steps and pan gains from the smoothed dials (every 16 samples, and on a snap). */
+  function coefs() {
+    var ws = TWOPI * A[3] / sr, f = A[3] * 18;
+    if (f > 12) f = 12;
+    var wf = TWOPI * f / sr, i, a, b, gl = 0, gr = 0, g;
+    A[19] = Math.cos(ws); A[20] = Math.sin(ws); A[23] = Math.cos(wf); A[24] = Math.sin(wf);
+    for (i = 0; i < 6; i++) {
+      a = Math.cos((ENS_PAN[i] * A[7] + 1) * 0.25 * PI);
+      b = Math.sin((ENS_PAN[i] * A[7] + 1) * 0.25 * PI);
+      g = i < 3 ? 1 : A[16];
+      PL[i] = a * g; PR[i] = b * g;
+      gl += a * a * g * g; gr += b * b * g * g;
+    }
+    A[25] = gl > 0 ? 1 / Math.sqrt(gl) : 0;
+    A[26] = gr > 0 ? 1 / Math.sqrt(gr) : 0;
+  }
+  init();
+  function set(k, snap) {
+    var x0;
+    if (k === 0) { x0 = E.V[0] ? 1 : 0; E.V[0] = x0; if (x0 && A[2] === 1) { clear(); A[2] = 0; } A[1] = x0; if (snap) A[0] = x0; return true; }
+    switch (k) {
+      case 1: if (!(E.V[1] = 0.01, E.V[2] = 20, take(E))) return false; A[4] = E.V[0]; if (snap) { A[3] = A[4]; coefs(); } return true;
+      case 2: if (!(E.V[1] = 0, E.V[2] = 1, take(E))) return false; A[6] = E.V[0]; if (snap) A[5] = A[6]; return true;
+      case 3: if (!(E.V[1] = 0, E.V[2] = 1, take(E))) return false; A[8] = E.V[0]; if (snap) { A[7] = A[8]; coefs(); } return true;
+      case 4: if (!(E.V[1] = 0, E.V[2] = 1, take(E))) return false; A[10] = E.V[0]; if (snap) A[9] = A[10]; return true;
+      case 5: if (!(E.V[1] = 3, E.V[2] = 6, take(E))) return false; x0 = E.V[0] >= 4.5 ? 6 : 3; E.V[0] = x0; A[11] = x0; if (snap) { A[16] = x0 === 6 ? 1 : 0; coefs(); } return true;
+      case 6: if (!(E.V[1] = 0, E.V[2] = 1, take(E))) return false; A[13] = E.V[0]; if (snap) A[12] = A[13]; return true;
+    }
+    return false;
+  }
+  function settleAll() { settle(A, 0); settle(A, 3); settle(A, 5); settle(A, 7); settle(A, 9); settle(A, 12); }
+  function step() {
+    D[0] = IO[0]; D[1] = IO[1];
+    var kf = E.kFast;
+    A[0] += (A[1] - A[0]) * kf;
+    if (A[1] === 0 && A[0] <= 0.001) { A[2] = 1; return; }
+    var xL = D[0], xR = D[1];
+    A[3] += (A[4] - A[3]) * kf;
+    A[5] += (A[6] - A[5]) * kf;
+    A[7] += (A[8] - A[7]) * kf;
+    A[9] += (A[10] - A[9]) * kf;
+    A[12] += (A[13] - A[12]) * kf;
+    var six = A[11] === 6 ? 1 : 0;
+    if (A[16] !== six) { A[16] += (six - A[16]) * kf; if (A[16] - six < 1e-6 && A[16] - six > -1e-6) A[16] = six; }
+    A[15] += 1;
+    if (A[15] >= 16) { A[15] = 0; coefs(); }
+    var w = A[14] | 0;
+    var tg = E.FC[1], x = xL * tg;
+    bufL[w] = (x > -1e-15 && x < 1e-15) ? 0 : x;
+    x = xR * tg;
+    bufR[w] = (x > -1e-15 && x < 1e-15) ? 0 : x;
+    // The two LFOs, rotating; each voice's offset is a fixed rotation of them.
+    var sc = A[17], ss = A[18], fc = A[21], fs = A[22];
+    A[17] = sc * A[19] - ss * A[20]; A[18] = ss * A[19] + sc * A[20];
+    A[21] = fc * A[23] - fs * A[24]; A[22] = fs * A[23] + fc * A[24];
+    if (w === 0) { // now and then, back onto the unit circle
+      var r1 = 1.5 - 0.5 * (A[17] * A[17] + A[18] * A[18]), r2 = 1.5 - 0.5 * (A[21] * A[21] + A[22] * A[22]);
+      A[17] *= r1; A[18] *= r1; A[21] *= r2; A[22] *= r2;
+    }
+    var ms = 0.001 * sr, slow = A[5] * ENS_SLOW_MS * ms, fast = A[12] * ENS_FAST_MS * ms;
+    var sumL = 0, sumR = 0, last = six === 1 || A[16] > 0 ? 6 : 3, i, ago, p, j, q, f, y;
+    for (i = 0; i < last; i++) {
+      ago = ENS_BASE_MS[i < 3 ? 0 : 1] * ms
+        + slow * (ss * ENS_COS[i] + sc * ENS_SIN[i])
+        + fast * (fs * ENS_COS[i] + fc * ENS_SIN[i]);
+      p = w - ago;
+      if (p < 0) p += n;
+      j = p | 0;
+      f = p - j;
+      q = j + 1 >= n ? 0 : j + 1;
+      y = bufL[j] + (bufL[q] - bufL[j]) * f;
+      sumL += PL[i] * y;
+      y = bufR[j] + (bufR[q] - bufR[j]) * f;
+      sumR += PR[i] * y;
+    }
+    A[14] = w + 1 >= n ? 0 : w + 1;
+    var m = A[9];
+    var dg = Math.cos(m * HALFPI), wg = Math.sin(m * HALFPI);
+    sumL *= A[25]; sumR *= A[26];
+    var hc = A[29];
+    A[27] += hc * (sumL - A[27]); sumL -= A[27];
+    A[28] += hc * (sumR - A[28]); sumR -= A[28];
+    if (A[27] > -LP_FLUSH && A[27] < LP_FLUSH) A[27] = 0;
+    if (A[28] > -LP_FLUSH && A[28] < LP_FLUSH) A[28] = 0;
+    IO[0] = dg * xL + wg * sumL * ENS_WET;
+    IO[1] = dg * xR + wg * sumR * ENS_WET;
+    finish(IO, D, A);
+  }
+  return unitBase(13, step, set, clear, [A, PL, PR], settleAll);
+}
+
 /** A new unit of type code t (UNIT) on env E. Allocates: call on the control path only. */
 function createUnit(E, t) {
   switch (t) {
@@ -1328,6 +1694,8 @@ function createUnit(E, t) {
     case 9: return unitLowpass(E);
     case 10: return unitHighpass(E);
     case 11: return unitBandpass(E);
+    case 12: return unitHall(E);
+    case 13: return unitEnsemble(E);
   }
   return null;
 }
@@ -1718,8 +2086,8 @@ function createFxDsp(sampleRate, opts) {
 //     it reads the clock once every 4096 loop turns, so a plugin's ordinary loops cost a decrement each.
 // Every buffer is made when the unit is made (on the control path); run() allocates nothing.
 
-/** Plugin unit type codes start here (after the 12 built-in units, UNIT_TYPES). */
-var PLUGIN_BASE = 12;
+/** Plugin unit type codes start here (after the 14 built-in units, UNIT_TYPES). */
+var PLUGIN_BASE = 14;
 /** The most frames a plugin's process() is given at once. */
 var PLUGIN_BLOCK = 128;
 /** Params a plugin may have (the chain's 16 per box, less the on flag). */
@@ -1926,7 +2294,7 @@ function createPluginUnit(E, code) {
 var EV_ADD = -1000;   // EV_ADD - b: box b goes live
 var EV_ORDER = -2000; // EV_ORDER - l: order list l
 var MAXK = 16;        // params per box in the event index (b * MAXK + k)
-var NTYPES = 12;
+var NTYPES = 14;
 var MAX_SLOTS = 8;
 
 /**

@@ -3,7 +3,7 @@
 nc-fx was created by [Peter Semmelhack](https://psem.me/).
 
 **NetComposer's one effects module: ASTRID's whole Hacks catalog, for every instrument and the Studio's Mix.**
-Drive, tempo-synced delay, plate reverb, EQ, compressor, width, flanger, chorus, phaser and (hidden, for old presets)
+Drive, tempo-synced delay, plate reverb, hall, ensemble, EQ, compressor, width, flanger, chorus, phaser and (hidden, for old presets)
 low-, high- and band-pass filters, moved out of ASTRID into a package so that ASTRID, Bass, Rhythm and the Studio all
 use the same code. Two ways to chain them, both ending in the pre-gain and a limiter fixed last:
 
@@ -137,6 +137,8 @@ Every effect has On/Off (bypass). In the fixed chain the order is drive → dela
 | **Drive** (`drive`) | Drive 0–24 dB (0 = clean; 0.1 dB steps in Acid), Output −12…+12 dB, Mix 0–100 %, Curve Smooth / Acid, Tone 0–100 (100 = off), Accent → drive and Accent → tone −100…+100 % | Smooth is `ncDrive*`: tanh with first-order ADAA, level-compensated. Acid is ASTRID-Bass's drive, bit-exact (below) |
 | **Delay** (`delay`) | Timing 1/32, 1/16, 1/8, 1/8 dotted, 1/4, 1/4 dotted, 1/2 (tempo-synced, max 4.9 s); Feedback 0–90 %; Wet/dry (`mix`) 0–100 %; Tone 0–100 (100 = off); Low cut 0–1000 Hz (0 = off); Mode Insert / Send; Send 0–100 %; Accent → send −100…+100 %; Free time 0–2 beats (0 = off) | `ncDelay*`: a stereo tap with linear interpolation and an 80 ms glide on time changes. Send mode is ASTRID-Bass's delay, bit-exact (below) |
 | **Reverb** (`plate`, alias `reverb`) | Pre-delay 0–200 ms, Size 0–100 (0.5×–1.5×), Decay, Damping, Mix 0–100 % | `ncPlate*`: Dattorro plate (JAES 1997) |
+| **Hall** (`hall`, nc-fx's own) | Size 0–100 %, Decay 0.5–12 s, Pre-delay 0–250 ms, Tone 1.5–19 kHz, Mix 0–100 % (default 25 %); More: Low cut 0–1000 Hz (0 = off, default 120 Hz), Width 0–100 %, Motion 0–100 % | Diffusion (4 all-passes a side) into an 8-line feedback delay network (Hadamard mix, a damping low-pass and a decay gain per line, Decay = the 500 Hz T60), each line swept slowly (Motion) so no mode rings; 12 dB/oct low cut and mid/side width on the wet. Always sleeps when fully bypassed |
+| **Ensemble** (`ensemble`, nc-fx's own) | Rate (0.05–10 Hz), Depth, Width, Mix (default 50 %); More: Voices 3 / 6, Vibrato | The string machine's ensemble: three voices (six: two sets) of a 7 ms delay swept by a slow and a fast LFO, 120° apart, panned by Width; a 100 Hz low cut on the wet. Always sleeps when fully bypassed |
 | **EQ** (`eq`) | Low, Mid, High −18…+18 dB; Mid at 0–100 (200 Hz–5 kHz); Mid Q 0–100 (0.3–6) | `ncEq*`: RBJ low shelf 150 Hz, bell, high shelf 6 kHz; flat is a wire |
 | **Compressor** (`compressor`) | Threshold −60…0 dB, Ratio 0–100 (1:1–20:1), Attack 1–100 ms, Release 10–1000 ms, Makeup 0–24 dB | `ncComp*`: feed-forward, stereo-linked, 6 dB soft knee |
 | **Width** (`width`) | Width 0–200 %, Balance L100…R100 | `ncWidth*`: mid/side |
