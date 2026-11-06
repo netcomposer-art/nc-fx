@@ -10,9 +10,14 @@ const H = await astridHacks();
 // nc-fx's names for ASTRID's dials where they differ.
 const KEY = (type, key) => (type === 'delay' && key === 'wet' ? 'mix' : key);
 
-test('types, order, labels, notes, hidden and the Add menu are ASTRID\'s', () => {
-  assert.deepEqual(CATALOG_TYPES, H.HACK_TYPES);
-  assert.deepEqual(CATALOG_MENU, H.HACK_MENU.map((d) => d.type));
+// nc-fx's own effects (Hall, Ensemble): not ASTRID's, checked in test/hall-ensemble.test.mjs.
+const OWN = CATALOG.filter((e) => e.own).map((e) => e.type);
+
+test('types, order, labels, notes, hidden and the Add menu are ASTRID\'s (with nc-fx\'s own Hall and Ensemble after Reverb)', () => {
+  assert.deepEqual(OWN, ['hall', 'ensemble']);
+  assert.deepEqual(CATALOG_TYPES.filter((t) => !OWN.includes(t)), H.HACK_TYPES);
+  assert.deepEqual(CATALOG_MENU.filter((t) => !OWN.includes(t)), H.HACK_MENU.map((d) => d.type));
+  assert.deepEqual(CATALOG_MENU.slice(0, 5), ['delay', 'plate', 'hall', 'ensemble', 'flanger']);
   for (const def of H.HACK_DEFINITIONS) {
     const e = catalogEntry(def.type);
     assert.equal(e.label, def.label);
@@ -38,7 +43,7 @@ test('every ASTRID dial: label, range, default, options; nc-fx\'s extra dials ar
       } else { assert.equal(d.min, ad.min); assert.equal(d.step, 1); }
     }
   }
-  assert.deepEqual(CATALOG.flatMap((e) => e.dials.filter((d) => d.more).map((d) => `${e.type}.${d.key}`)),
+  assert.deepEqual(CATALOG.filter((e) => !e.own).flatMap((e) => e.dials.filter((d) => d.more).map((d) => `${e.type}.${d.key}`)),
     ['delay.tone', 'delay.low_cut', 'delay.mode', 'delay.send', 'delay.mod_send', 'delay.beats_free', 'drive.curve', 'drive.tone', 'drive.mod_drive', 'drive.mod_tone']);
 });
 

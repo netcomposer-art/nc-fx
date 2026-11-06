@@ -2,7 +2,7 @@
 // FX cards, ASTRID's Hacks panel) are generated from.
 // nc-fx was created by Peter Semmelhack (https://psem.me/). MIT License.
 //
-// Labels, ranges, defaults, options, dial laws and readouts are ASTRID's (psemmelhack/NetComposer-Synth 7292c57,
+// Labels, ranges, defaults, options, dial laws and readouts are ASTRID's (Hall and Ensemble, marked `own`, are nc-fx's) (psemmelhack/NetComposer-Synth 7292c57,
 // lib/synth-audio/src/hacks.ts: HACK_DEFINITIONS, hackParams, the formatters), which copied them from the site's
 // create/hacks/stack.js. test/catalog.test.mjs checks every dial and every readout against ASTRID's own hacks.ts.
 // nc-fx's additions (drive Curve/Tone/accent depths, delay Tone/Low cut/Mode/Send/Free time, the 1/32 note) are
@@ -38,7 +38,8 @@ var L = {
   ratio: { pow: [1, 20], div: 100, fixed: 2 }, // ratioOf
   rate: { pow: [0.05, 200], div: 100, fixed: 3 }, // hackRateHz
   driveTone: { exp2: [500, 5], div: 99, round: true }, // Bass's drive tone (500 Hz * 2^(5t), t = v / 99)
-  delayTone: { exp2: [800, 4], div: 99, round: true }  // Bass's delay tone (800 Hz * 2^(4t))
+  delayTone: { exp2: [800, 4], div: 99, round: true }, // Bass's delay tone (800 Hz * 2^(4t))
+  hallTone: { exp2: [1500, 3.7], div: 100, round: true } // Hall's tone: 1.5 kHz at 0, 7.0 kHz at 60, 19 kHz at 100
 };
 var WET = { fmt: 'wet' }, PCT = { fmt: 'pct' }, DB = { fmt: 'db' }, SPCT = { fmt: 'signedPct' }, MS = { fmt: 'num', suffix: ' ms' };
 var C100 = { div: 100 };
@@ -49,8 +50,9 @@ function d(key, label, min, max, value, k, format, extra) {
 }
 function opts(list) { return list.map(function (p) { return { value: p[0], label: p[1] }; }); }
 
-/** Every effect, in ASTRID's HACK_DEFINITIONS order. `hidden`: loads, plays and shows, but isn't offered in "Add".
- * `fixed`: also one of createFxDsp's fixed chain (drive -> delay -> plate). */
+/** Every effect, in ASTRID's HACK_DEFINITIONS order, with nc-fx's own (`own`: Hall, Ensemble) after Reverb.
+ * `hidden`: loads, plays and shows, but isn't offered in "Add". `fixed`: also one of createFxDsp's fixed chain
+ * (drive -> delay -> plate). */
 export var CATALOG = [
   { type: 'lowpass', label: 'Low-pass filter', hidden: true, dials: [
     d('cutoff', 'Cutoff', 0, 100, 0, 1, { fmt: 'hz', law: L.cutoff, astrid: true, zero: 'open' })] },
@@ -79,6 +81,24 @@ export var CATALOG = [
     d('decay', 'Decay', 0, 100, 50, 3, PCT, { dsp: C100, unit: '%' }),
     d('damping', 'Damping', 0, 100, 0, 4, PCT, { dsp: C100, unit: '%' }),
     d('mix', 'Mix', 0, 100, 0, 5, WET, { dsp: C100, unit: '%' })] },
+  // nc-fx's own (2026-11-05, Peter's mockup), not ASTRID's: `own`, so ASTRID's parity tests skip them and ASTRID's
+  // saves never hold them. Offered in Add right after Reverb.
+  { type: 'hall', label: 'Hall', own: true, dials: [
+    d('size', 'Size', 0, 100, 60, 1, PCT, { dsp: C100, unit: '%' }),
+    d('decay', 'Decay', 5, 120, 35, 2, { fmt: 'fixed', div: 10, add: 0, digits: 1, suffix: ' s' }, { dsp: { div: 10 }, unit: 's' }),
+    d('predelay', 'Pre-delay', 0, 250, 20, 3, MS, { dsp: { div: 1000 }, unit: 'ms' }),
+    d('tone', 'Tone', 0, 100, 60, 4, { fmt: 'hz', law: L.hallTone, astrid: true }, { dsp: { law: L.hallTone } }),
+    d('mix', 'Mix', 0, 100, 25, 5, WET, { dsp: C100, unit: '%' }),
+    d('low_cut', 'Low cut', 0, 1000, 120, 6, { fmt: 'hz', zero: 'off' }, { unit: 'Hz', curve: 'log', more: true }),
+    d('width', 'Width', 0, 100, 100, 7, PCT, { dsp: C100, unit: '%', more: true }),
+    d('motion', 'Motion', 0, 100, 30, 8, PCT, { dsp: C100, unit: '%', more: true })] },
+  { type: 'ensemble', label: 'Ensemble', own: true, dials: [
+    d('rate', 'Rate', 0, 100, 35, 1, { fmt: 'rate', law: L.rate }, { dsp: { law: L.rate } }),
+    d('depth', 'Depth', 0, 100, 60, 2, PCT, { dsp: C100, unit: '%' }),
+    d('width', 'Width', 0, 100, 80, 3, PCT, { dsp: C100, unit: '%' }),
+    d('mix', 'Mix', 0, 100, 50, 4, WET, { dsp: C100, unit: '%' }),
+    d('voices', 'Voices', 3, 6, 3, 5, { fmt: 'option' }, { step: null, options: opts([[3, '3'], [6, '6']]), more: true }),
+    d('vibrato', 'Vibrato', 0, 100, 20, 6, PCT, { dsp: C100, unit: '%', more: true })] },
   // ASTRID's own (hacks-astrid/mod.js).
   { type: 'flanger', label: 'Flanger', dials: [
     d('rate', 'Rate', 0, 100, 26, 1, { fmt: 'rate', law: L.rate }, { dsp: { law: L.rate } }),
@@ -124,8 +144,8 @@ export var CATALOG = [
 ];
 /** Every type that loads (older files included), in catalog order. */
 export var CATALOG_TYPES = CATALOG.map(function (e) { return e.type; });
-/** What "Add" offers: everything not hidden, in ASTRID's order (Delay, Reverb, Flanger, Chorus, Phaser, EQ, Drive,
- * Compressor, Width). */
+/** What "Add" offers: everything not hidden, in ASTRID's order with Hall and Ensemble after Reverb (Delay, Reverb,
+ * Hall, Ensemble, Flanger, Chorus, Phaser, EQ, Drive, Compressor, Width). */
 export var CATALOG_MENU = CATALOG.filter(function (e) { return !e.hidden; }).map(function (e) { return e.type; });
 
 var ALIAS = { reverb: 'plate' };

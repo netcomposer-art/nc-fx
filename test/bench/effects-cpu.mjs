@@ -21,6 +21,7 @@ if (which) {
     if (which === 'drive') s.dials.drive_db = 12;
     if (which === 'lowpass' || which === 'highpass') s.dials.cutoff = 50;
     if (which === 'delay' || which === 'plate') s.dials.mix = 40;
+    // hall and ensemble run at their defaults (Mix 25% and 50%).
     fx.add(1, which, 0);
     for (const [k, v] of slotProgram(s)) fx.set(1, k, v, 0, true);
     fx.order([1], 0, true);

@@ -177,9 +177,10 @@ export function slotProgram(slot) {
 export function toAstridHacks(state) {
   var s = sanitizeSlots(state, 8), lossy = [];
   var hacks = s.chain.filter(function (h) {
-    if (!h.plugin) return true;
-    lossy.push(h.id + ': ASTRID has no plugins');
-    return false;
+    if (h.plugin) { lossy.push(h.id + ': ASTRID has no plugins'); return false; }
+    var own = catalogEntry(h.type);
+    if (own && own.own) { lossy.push(h.id + ': ASTRID has no ' + own.label); return false; }
+    return true;
   }).map(function (h, i) {
     var e = catalogEntry(h.type), dials = {};
     if (i >= DEFAULT_SLOTS) lossy.push(h.id + ': ASTRID keeps three hacks');
@@ -219,7 +220,7 @@ function dialOf(e, key) { for (var i = 0; i < e.dials.length; i++) if (e.dials[i
 /** The site's schema-2 document (hacks.ts hackChainDocument): the widgets, then the fixed limiter. */
 export function toAstridDocument(state, tempo) {
   var s = sanitizeSlots(state, 8);
-  return { schema: 2, chain: s.chain.filter(function (h) { return !h.plugin; }).map(function (h) { return { id: h.id, type: h.type, version: 1, bypass: h.bypass, params: astridParams(h, tempo) }; })
+  return { schema: 2, chain: s.chain.filter(function (h) { var e = catalogEntry(h.type); return !h.plugin && !(e && e.own); }).map(function (h) { return { id: h.id, type: h.type, version: 1, bypass: h.bypass, params: astridParams(h, tempo) }; })
     .concat([{ id: 'limiter', type: 'limiter', version: 1, bypass: false, fixed: true, params: {} }]) };
 }
 void CATALOG_TYPES;

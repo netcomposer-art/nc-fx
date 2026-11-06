@@ -27,7 +27,7 @@ import { NC_PLUGINS, PLUGIN_BASE, PLUGIN_BLOCK, OP_ERR, pluginCode, createPlugin
 var EV_ADD = -1000;   // EV_ADD - b: box b goes live
 var EV_ORDER = -2000; // EV_ORDER - l: order list l
 var MAXK = 16;        // params per box in the event index (b * MAXK + k)
-var NTYPES = 12;
+var NTYPES = 14;
 var MAX_SLOTS = 8;
 
 /**

@@ -10,7 +10,7 @@ import { newSlot, slotProgram } from '../src/slots.js';
 
 const now = () => Number(process.hrtime.bigint()) / 1e3;
 const median = (a) => a.slice().sort((x, y) => x - y)[a.length >> 1];
-const CHAINS = [['eq', 'compressor', 'width'], ['flanger', 'chorus', 'phaser'], ['lowpass', 'highpass', 'bandpass'], ['drive', 'delay', 'plate']];
+const CHAINS = [['eq', 'compressor', 'width'], ['flanger', 'chorus', 'phaser'], ['lowpass', 'highpass', 'bandpass'], ['drive', 'delay', 'plate'], ['hall', 'ensemble', 'chorus']];
 
 for (const [types, bypassMode] of [...CHAINS.map((c) => [c, 'run']), [CHAINS[1], 'hold'], [CHAINS[0], 'hold']]) {
   test(`60 s of silence after turning ${types.join(' + ')} down: µs/block doesn't climb (bypass ${bypassMode})`, () => {
