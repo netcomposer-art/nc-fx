@@ -33,8 +33,9 @@ node scripts/check-plugin.mjs test/fixtures/plugins/tremolo --browser   # the pl
 - **Nothing allocates on the audio path.** No `new`, `[]`, `{}`, closures or array methods in `process()`, `step()`,
   `set()` or `run()`; numbers cross through typed arrays. The heap-delta gates and static scans enforce it.
 - **Styling:** `src/ui-style.js` uses nc-ui custom properties only: no colours, no px (the tests lint it). Accent
-  colours come only from the instrument title colours (ASTRID #EB512E, PETRA #5AC4F7, OLIVE #9CA536, LUCY #9B30FF,
-  NYX #FEAA02), through nc-ui tokens. Anything else: stop and ask.
+  colours come only from the instrument title colours (light / dark, Peter 2026-11-06: ASTRID #EB512E / #EB512E, PETRA
+  #0A94D6 / #5AC4F7, OLIVE #8A9230 / #9CA536, LUCY #9B30FF / #B566FF, NYX #BF8001 / #FEAA02, CALLIOPE #FC409F /
+  #FD7CBD), through nc-ui tokens. Anything else: stop and ask.
 - **Copy:** short plain sentences.
 - **Vendoring:** apps copy this repo's `src/`, `dist/` and `package.json` into `vendor/nc-fx/` with a
   `VENDORED_FROM` line (repo, commit). Don't edit a vendored copy; change nc-fx and re-vendor.
