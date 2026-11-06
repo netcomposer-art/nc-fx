@@ -99,10 +99,10 @@ var L_PRE = 0, L_IN = 1, L_AP1 = 5, L_D1 = 7, L_AP2 = 9, L_D2 = 11, N_LINES = 13
 var PLATE_IG = [0.75, 0.75, 0.625, 0.625];
 
 /** Unit type codes (the engine's numbers for the catalog's types). */
-var UNIT = { drive: 0, delay: 1, plate: 2, eq: 3, compressor: 4, width: 5, flanger: 6, chorus: 7, phaser: 8, lowpass: 9, highpass: 10, bandpass: 11, hall: 12, ensemble: 13 };
-var UNIT_TYPES = ['drive', 'delay', 'plate', 'eq', 'compressor', 'width', 'flanger', 'chorus', 'phaser', 'lowpass', 'highpass', 'bandpass', 'hall', 'ensemble'];
+var UNIT = { drive: 0, delay: 1, plate: 2, eq: 3, compressor: 4, width: 5, flanger: 6, chorus: 7, phaser: 8, lowpass: 9, highpass: 10, bandpass: 11, hall: 12, ensemble: 13, gate: 14 };
+var UNIT_TYPES = ['drive', 'delay', 'plate', 'eq', 'compressor', 'width', 'flanger', 'chorus', 'phaser', 'lowpass', 'highpass', 'bandpass', 'hall', 'ensemble', 'gate'];
 /** Params per unit (k = 0 is the on flag). */
-var UNIT_NPARAMS = [8, 10, 6, 6, 6, 3, 5, 5, 6, 2, 3, 4, 9, 7];
+var UNIT_NPARAMS = [8, 10, 6, 6, 6, 3, 5, 5, 6, 2, 3, 4, 9, 7, 16];
 
 /** ctl() ops. Results are small integers (1 = true), never doubles. */
 var OP_NONE = 0, OP_CLEAR = 1, OP_FADE_BEGIN = 2, OP_FADE_WORK = 3, OP_FADE_DONE = 4, OP_FADE_IDLE = 5,
@@ -120,10 +120,17 @@ function createFxEnv(sampleRate, opts) {
     kFast: fxCoef(0.02, sr), kSlow: fxCoef(0.08, sr),
     IO: new Float64Array(2), V: new Float64Array(3), // V: 0 the value for set(), 1-2 bounds for take()
     T: new Float64Array(5), // 0 bpm, 1 next frame, 2 peakL, 3 peakR, 4 due-up-to frame (the engine's clock)
+    // The beat clock (Gate): 0 anchor beat, 1 anchor frame, 2 beats per frame, 3 this block's first frame,
+    // 4 line-ups so far (a host anchor that moved the beat: Play), 5 locked (1 after setBeat, 0 free-running),
+    // 6 changes so far (the worklet reports the clock when it moves), 7 beats per bar.
+    // beat(frame) = B[0] + (frame - B[1]) * B[2]. It runs from construction at the tempo, so a Gate moves while the
+    // transport is stopped (free-running), and lines up when the host sends a beat (Play).
+    B: new Float64Array(8),
     FC: new Float64Array(3), // clear({fadeMs}): 0 phase (0 off, 1 fading out, 2 clearing, 3 fading in), 1 wet gain, 2 step
     mod: null
   };
   E.T[0] = 120;
+  E.B[1] = o.startFrame > 0 ? Math.round(o.startFrame) : 0; E.B[2] = 2 / sr; E.B[3] = E.B[1]; E.B[7] = 4;
   E.FC[1] = 1;
   return E;
 }
@@ -1465,7 +1472,7 @@ function unitHall(E) {
     if (H[18] >= 16) { H[18] = 0; coefs(); }
     var tg = E.FC[1];
     // Pre-delay (integer read is enough at these lengths), both sides.
-    var pre = H[7] | 0, dl, dr;
+    var pre = H[7] | 0, dl = 0, dr = 0; // numbers from the start: an undefined start kept them boxed (an allocation each sample)
     for (j = 0; j < 2; j++) {
       buf = HB[16 + j]; n = HN[16 + j]; w = HW[16 + j];
       v = (j === 0 ? xL : xR) * tg;
@@ -1679,6 +1686,133 @@ function unitEnsemble(E) {
   return unitBase(13, step, set, clear, [A, PL, PR], settleAll);
 }
 
+// ---------------------------------------------------------------------------------------------------------------
+// Gate (nc-fx's own, Peter's go 2026-11-06): a tempo-synced step shaper. A pattern of 8 or 16 steps, each a level
+// (0-100 %) and a shape, plays on the engine's beat clock (E.B): free-running at the tempo while the transport is
+// stopped, lined up with the bar on Play (a 10 ms glide, as ASTRID's gridded LFOs). Volume mode scales the level;
+// Filter mode opens a 12 dB/oct low-pass instead. Every change of gain goes through two one-poles (Smooth, 1-20 ms),
+// so no step edge clicks. 1/8T restarts the pattern every bar (12 steps a bar; with 16 steps, 13-16 don't play).
+// k: 0 on, 1 rate (steps per bar: 4, 8, 16, or 12 for 1/8T), 2 steps (8, 16), 3 swing 0-1, 4 depth 0-1, 5 mix 0-1,
+// 6 mode (0 volume, 1 filter), 7 smooth (ms), 8 spread 0-1 (the right side lags up to half a step), 9 resonance 0-1,
+// 10-13 levels (4 steps each, 0-100, base 101), 14-15 shapes (8 steps each, base 5: 0 hard, 1 pump, 2 swell,
+// 3 blip, 4 glide).
+var GATE_FMIN = 90, GATE_FMAX = 18000, GATE_HANDOFF = 0.01;
+function unitGate(E) {
+  var sr = E.sr, IO = E.IO, D = new Float64Array(2), B = E.B;
+  // A: 0 on, 1 onT, 2 slept, 3 beats per step, 4 steps, 5 swing (0.5-0.75), 6 depthS, 7 depthT, 8 mixS, 9 mixT,
+  // 10 mode, 11 smooth coef, 12 spread, 13 res (k = 1/Q), 14-15 gain L stage 1-2, 16-17 gain R stage 1-2,
+  // 18-21 SVF L (ic1, ic2), R (ic1, ic2), 22 filter tick, 23 gL, 24 gR (svf g), 25 line-ups seen, 26 handoff left,
+  // 27 handoff coef, 28 smooth ms, 29 triplets (1/8T: counts from the bar)
+  var A = new Float64Array(30);
+  var LV = new Float64Array(16), SH = new Int32Array(16), G = new Float64Array(3);
+  function init() {
+    A.fill(0); A[3] = 0.25; A[4] = 16; A[5] = 0.5; A[6] = 1; A[7] = 1; A[8] = 1; A[9] = 1; A[28] = 4;
+    A[13] = 1.2; A[27] = fxCoef(GATE_HANDOFF / 3, sr);
+    for (var i = 0; i < 16; i++) { LV[i] = 1; SH[i] = 0; }
+    smoothCoef(); clear();
+  }
+  // Two poles of ms/3 each: ~95 % of a jump in `ms`. Written out (not fxCoef): a double passed to a call boxes.
+  function smoothCoef() { A[11] = 1 - Math.exp(-3000 / (A[28] * sr)); }
+  function clear() { A[14] = 1; A[15] = 1; A[16] = 1; A[17] = 1; A[18] = 0; A[19] = 0; A[20] = 0; A[21] = 0; A[22] = 0; A[23] = 1; A[24] = 1; A[25] = -1; A[26] = 0; } // 25 = -1: take the clock's line-ups as they are (no read of B here: a double read off the audio path boxes)
+  init();
+  function set(k, snap) {
+    var x, i, n, d;
+    if (k === 0) { x = E.V[0] ? 1 : 0; E.V[0] = x; if (x && A[2] === 1) { clear(); A[2] = 0; } A[1] = x; if (snap) A[0] = x; return true; }
+    switch (k) {
+      case 1: if (!(E.V[1] = 4, E.V[2] = 16, take(E))) return false; x = E.V[0]; x = x < 6 ? 4 : x < 10 ? 8 : x < 14 ? 12 : 16; E.V[0] = x; A[3] = 4 / x; A[29] = x === 12 ? 1 : 0; return true;
+      case 2: if (!(E.V[1] = 8, E.V[2] = 16, take(E))) return false; x = E.V[0] < 12 ? 8 : 16; E.V[0] = x; A[4] = x; return true;
+      case 3: if (!(E.V[1] = 0, E.V[2] = 1, take(E))) return false; A[5] = 0.5 + 0.25 * E.V[0]; return true;
+      case 4: if (!(E.V[1] = 0, E.V[2] = 1, take(E))) return false; A[7] = E.V[0]; if (snap) A[6] = A[7]; return true;
+      case 5: if (!(E.V[1] = 0, E.V[2] = 1, take(E))) return false; A[9] = E.V[0]; if (snap) A[8] = A[9]; return true;
+      case 6: if (!(E.V[1] = 0, E.V[2] = 1, take(E))) return false; x = E.V[0] >= 0.5 ? 1 : 0; E.V[0] = x; if (x !== A[10]) { A[18] = 0; A[19] = 0; A[20] = 0; A[21] = 0; } A[10] = x; return true;
+      case 7: if (!(E.V[1] = 1, E.V[2] = 20, take(E))) return false; A[28] = E.V[0]; A[11] = 1 - Math.exp(-3000 / (A[28] * sr)); return true; // inline: smoothCoef() is rare, so unoptimised
+      case 8: if (!(E.V[1] = 0, E.V[2] = 1, take(E))) return false; A[12] = E.V[0]; return true;
+      case 9: if (!(E.V[1] = 0, E.V[2] = 1, take(E))) return false; A[13] = 1.2 - 1.0 * E.V[0]; return true; // k = 1/Q: Q 0.83..5
+      case 10: case 11: case 12: case 13:
+        if (!(E.V[1] = 0, E.V[2] = 104060400, take(E))) return false;
+        n = Math.round(E.V[0]); E.V[0] = n;
+        for (i = 0; i < 4; i++) { d = n % 101; LV[(k - 10) * 4 + i] = d * 0.01; n = (n - d) / 101; }
+        return true;
+      case 14: case 15:
+        if (!(E.V[1] = 0, E.V[2] = 390624, take(E))) return false;
+        n = Math.round(E.V[0]); E.V[0] = n;
+        for (i = 0; i < 8; i++) { d = n % 5; SH[(k - 14) * 8 + i] = d; n = (n - d) / 5; }
+        return true;
+    }
+    return false;
+  }
+  function settleAll() { settle(A, 0); settle(A, 6); settle(A, 8); }
+  /** The pattern's target (0..1) at beat G[2], into G[c] (the beat crosses in G: a double argument would box). */
+  function target(c) {
+    // Steps in pairs (swing delays the second of each pair). The pair number wraps at 16 pairs (a whole pattern of
+    // 8 or 16 steps), so every index is a small integer however long the clock has run. 1/8T counts from the bar.
+    var b = G[2], n = A[4] | 0, last = 31;
+    if (A[29] === 1) { var bar = E.B[7]; b -= Math.floor(b / bar) * bar; last = 11; }
+    var q = b / A[3] * 0.5, fp = Math.floor(q), f = q - fp, sw = A[5], p;
+    var pair = (fp - Math.floor(fp * 0.0625) * 16) | 0, idx;
+    if (f < sw) { idx = pair * 2; p = f / sw; } else { idx = pair * 2 + 1; p = (f - sw) / (1 - sw); }
+    var s = idx & (n - 1), nx = (idx >= last ? 0 : idx + 1) & (n - 1);
+    var L = LV[s], g, c2;
+    switch (SH[s]) {
+      case 1: c2 = p * 1.6667; if (c2 > 1) c2 = 1; g = L * c2 * (2 - c2); break;          // pump: ducks at the step, back by 60 %
+      case 2: g = L * p * p; break;                                                    // swell: rises through the step
+      case 3: g = p < 0.12 ? L : L * Math.exp((0.12 - p) * 18); break;                 // blip: a short hit, then gone
+      case 4: c2 = p * p * (3 - 2 * p); g = L + (LV[nx] - L) * c2; break;              // glide to the next step
+      default: g = L;                                                                  // hard
+    }
+    G[c] = g;
+  }
+  function step(i) {
+    D[0] = IO[0]; D[1] = IO[1];
+    var kf = E.kFast;
+    A[0] += (A[1] - A[0]) * kf;
+    if (A[1] === 0 && A[0] <= 0.001) { A[2] = 1; return; }
+    A[6] += (A[7] - A[6]) * kf;
+    A[8] += (A[9] - A[8]) * kf;
+    G[2] = B[0] + (B[3] + i - B[1]) * B[2];
+    target(0);
+    if (A[12] > 0) { G[2] -= A[12] * 0.5 * A[3]; target(1); } else G[1] = G[0];
+    // Play moved the beat: glide there over GRID_HANDOFF (ASTRID's line-up), not the step's own ramp.
+    if (A[25] !== B[4]) { if (A[25] >= 0) A[26] = GATE_HANDOFF * sr; A[25] = B[4]; }
+    var k = A[11];
+    if (A[26] > 0) { A[26] -= 1; if (A[27] < k) k = A[27]; }
+    A[14] += (G[0] - A[14]) * k; A[15] += (A[14] - A[15]) * k;
+    A[16] += (G[1] - A[16]) * k; A[17] += (A[16] - A[17]) * k;
+    var d = A[15] - G[0];
+    if (d < 1e-12 && d > -1e-12 && A[14] === G[0]) A[15] = G[0];
+    d = A[14] - G[0]; if (d < 1e-12 && d > -1e-12) A[14] = G[0];
+    d = A[16] - G[1]; if (d < 1e-12 && d > -1e-12) A[16] = G[1];
+    d = A[17] - G[1]; if (d < 1e-12 && d > -1e-12 && A[16] === G[1]) A[17] = G[1];
+    var xL = D[0], xR = D[1], yL, yR, dep = A[6], m = A[8];
+    if (A[10] === 0) {
+      yL = xL * (1 - dep * (1 - A[15]));
+      yR = xR * (1 - dep * (1 - A[17]));
+    } else {
+      // Filter: the step opens a 12 dB/oct low-pass (TPT state-variable), cutoff on a log scale; coefs every 8 samples.
+      if (A[22] <= 0) {
+        A[22] = 8;
+        A[23] = Math.tan(PI * GATE_FMAX * Math.pow(GATE_FMIN / GATE_FMAX, dep * (1 - A[15])) / sr);
+        A[24] = A[12] > 0 ? Math.tan(PI * GATE_FMAX * Math.pow(GATE_FMIN / GATE_FMAX, dep * (1 - A[17])) / sr) : A[23];
+      }
+      A[22] -= 1;
+      var R = A[13], g = A[23], a1 = 1 / (1 + g * (g + R)), v1, v2;
+      v1 = a1 * (A[18] + g * (xL - A[19])); v2 = A[19] + g * v1;
+      A[18] = 2 * v1 - A[18]; A[19] = 2 * v2 - A[19]; yL = v2;
+      g = A[24]; a1 = 1 / (1 + g * (g + R));
+      v1 = a1 * (A[20] + g * (xR - A[21])); v2 = A[21] + g * v1;
+      A[20] = 2 * v1 - A[20]; A[21] = 2 * v2 - A[21]; yR = v2;
+      if (A[18] > -LP_FLUSH && A[18] < LP_FLUSH) A[18] = 0;
+      if (A[19] > -LP_FLUSH && A[19] < LP_FLUSH) A[19] = 0;
+      if (A[20] > -LP_FLUSH && A[20] < LP_FLUSH) A[20] = 0;
+      if (A[21] > -LP_FLUSH && A[21] < LP_FLUSH) A[21] = 0;
+    }
+    IO[0] = xL + (yL - xL) * m;
+    IO[1] = xR + (yR - xR) * m;
+    finish(IO, D, A);
+  }
+  return unitBase(14, step, set, clear, [A, LV, SH], settleAll);
+}
+
 /** A new unit of type code t (UNIT) on env E. Allocates: call on the control path only. */
 function createUnit(E, t) {
   switch (t) {
@@ -1696,6 +1830,7 @@ function createUnit(E, t) {
     case 11: return unitBandpass(E);
     case 12: return unitHall(E);
     case 13: return unitEnsemble(E);
+    case 14: return unitGate(E);
   }
   return null;
 }
@@ -2004,6 +2139,11 @@ function createFxDsp(sampleRate, opts) {
     /** Tempo for synced params (the delay). A change glides the delay time (80 ms), tape-style. False if refused. */
     setTempo: function (bpm, frame, snap) { return schedule(EV_TEMPO, bpm, frame, snap ? 1 : 0); },
     getTempo: function () { return T[0]; },
+    /** The fixed chain has no Gate: its beat clock calls are accepted and do nothing. */
+    setBeat: function () { return true; },
+    freeRun: function () { return true; },
+    setBar: function () { return true; },
+    clock: E.B,
     /**
      * Panic: drop the delay and reverb tails now (or at a frame). fadeMs > 0 ramps the wet signal down over that
      * long first, then zeroes the lines a chunk per block and ramps back in (no click, no big fill). The instant
@@ -2086,8 +2226,8 @@ function createFxDsp(sampleRate, opts) {
 //     it reads the clock once every 4096 loop turns, so a plugin's ordinary loops cost a decrement each.
 // Every buffer is made when the unit is made (on the control path); run() allocates nothing.
 
-/** Plugin unit type codes start here (after the 14 built-in units, UNIT_TYPES). */
-var PLUGIN_BASE = 14;
+/** Plugin unit type codes start here (after the 15 built-in units, UNIT_TYPES). */
+var PLUGIN_BASE = 15;
 /** The most frames a plugin's process() is given at once. */
 var PLUGIN_BLOCK = 128;
 /** Params a plugin may have (the chain's 16 per box, less the on flag). */
@@ -2293,8 +2433,11 @@ function createPluginUnit(E, code) {
 
 var EV_ADD = -1000;   // EV_ADD - b: box b goes live
 var EV_ORDER = -2000; // EV_ORDER - l: order list l
+var EV_BEAT = -3;     // the beat clock's line-up (Gate): beat v at the event's frame
+var EV_FREE = -4;     // the beat clock runs free from the event's frame (the transport stopped)
+var EV_BAR = -5;      // beats per bar (1/8T restarts each bar)
 var MAXK = 16;        // params per box in the event index (b * MAXK + k)
-var NTYPES = 14;
+var NTYPES = 15;
 var MAX_SLOTS = 8;
 
 /**
@@ -2418,9 +2561,23 @@ function createFxChainDsp(sampleRate, opts) {
       if (i === EV_TEMPO) {
         if (v !== v) continue;
         T[0] = v < 20 ? 20 : v > 400 ? 400 : v;
+        // The beat clock keeps its beat at this frame and goes on at the new tempo.
+        E.B[0] += (T[4] - E.B[1]) * E.B[2]; E.B[1] = T[4]; E.B[2] = T[0] / (60 * sr); E.B[6] += 1;
         for (b = 0; b < NB; b++) if (STATE[b] !== 0 && TYPE[b] === 1) CUR[b].retarget(snap);
         continue;
       }
+      if (i === EV_BEAT) { // the host's line-up (Play): beat v at this frame; a move of over 1 ms glides (Gate)
+        if (v !== v) continue;
+        var was = E.B[0] + (T[4] - E.B[1]) * E.B[2], tol = E.B[2] * 0.001 * sr;
+        E.B[0] = v; E.B[1] = T[4]; E.B[5] = 1; E.B[6] += 1;
+        if (was - v > tol || v - was > tol) E.B[4] += 1;
+        continue;
+      }
+      if (i === EV_FREE) { // Stop: the clock runs on from where it is, free (unlocked)
+        E.B[0] += (T[4] - E.B[1]) * E.B[2]; E.B[1] = T[4]; E.B[5] = 0; E.B[6] += 1;
+        continue;
+      }
+      if (i === EV_BAR) { if (v >= 1 && v <= 16) { E.B[7] = Math.round(v); E.B[6] += 1; } continue; }
       if (i === EV_CLEAR) {
         if (v > 0) {
           var fs = (v > 1000 ? 1000 : v) * 0.001 * sr;
@@ -2663,6 +2820,14 @@ function createFxChainDsp(sampleRate, opts) {
     /** The uids playing now, in order (a new array: for tests and hosts, not the audio path). */
     playing: function () { var out = []; for (var m = 0; m < ON[0]; m++) out.push(UID[ORD[m]]); return out; },
     setTempo: function (bpm, frame, snap) { return schedule(EV_TEMPO, bpm, frame, snap ? 1 : 0); },
+    /** Line the beat clock up (Play): `beat` (transport beats, 0 = bar 1) at `frame`. Gates follow it. */
+    setBeat: function (beat, frame) { return schedule(EV_BEAT, beat, frame, 0); },
+    /** The transport stopped: the beat clock runs on at the tempo from `frame`, free. */
+    freeRun: function (frame) { return schedule(EV_FREE, 0, frame, 0); },
+    /** Beats per bar (default 4): 1/8T restarts the pattern every bar. */
+    setBar: function (beats, frame) { return schedule(EV_BAR, beats, frame, 0); },
+    /** The beat clock (E.B: anchor beat, anchor frame, beats per frame, ..., locked, changes, beats per bar). */
+    clock: E.B,
     getTempo: function () { return T[0]; },
     /** As createFxDsp's: instant (every effect's state, as ASTRID's ncChainClear) or fadeMs (delay and reverb tails). */
     clear: function (frame, fadeMs) { return schedule(EV_CLEAR, fadeMs > 0 ? fadeMs : 0, frame, 0); },
@@ -2677,6 +2842,7 @@ function createFxChainDsp(sampleRate, opts) {
         u.set(-1, false); u.retarget(-1); // keep them optimised (see createFxDsp's due())
       }
       T[2] = 0; T[3] = 0;
+      E.B[3] = start;
       if (MT[0] === 1) meterInput(inL, inR, frames, MC);
       admit();
       var i = 0;
@@ -2731,6 +2897,11 @@ class NcFxProcessor extends AudioWorkletProcessor {
     if (this.slots) { if (po.chain) this.sync(po.chain, po.order || [], 0); }
     else if (po.program) this.dsp.load(po.program, 0, true);
     this.alive = true;
+    // The beat clock goes to the main thread when it changes (tempo, line-up, stop; a few times a session), as
+    // { t: 'clk', d: [beat, frame, beats per frame, locked, beats per bar] }: the host reads the playhead from it.
+    this.cSeen = -1;
+    this.cBuf = new Float64Array(5);
+    this.cMsg = { t: 'clk', d: this.cBuf };
     // Level taps (a host meter is open): every METER_S the peaks go out as one small message, { t: 'lv', d }, the same
     // buffer each time (postMessage copies it). Silence goes out once, then nothing until there is sound again.
     this.mOn = false;
@@ -2778,6 +2949,10 @@ class NcFxProcessor extends AudioWorkletProcessor {
       case 'p': if (!this.slots) d.set(m.i, m.v, frame, snap); break;
       case 'load': if (!this.slots && m.program) d.load(m.program, frame, snap); break;
       case 'tempo': d.setTempo(m.bpm, frame, snap); break;
+      // The beat clock (Gate): a line-up (Play), free-running (Stop), beats per bar.
+      case 'beat': d.setBeat(m.beat, frame); break;
+      case 'free': d.freeRun(frame); break;
+      case 'bar': d.setBar(m.beats, frame); break;
       case 'clear': d.clear(frame, m.fadeMs); break;
       // Slot chain: add an effect (its params follow as snapped 'ps'), set one param, the order to play.
       case 'add':
@@ -2816,6 +2991,13 @@ class NcFxProcessor extends AudioWorkletProcessor {
     var mi = inputs.length > 1 ? inputs[1] : null;
     var mod = mi && mi.length > 0 ? mi[0] : null;
     this.dsp.process(inL, inR, out[0], out.length > 1 ? out[1] : null, out[0].length, currentFrame, mod);
+    var ck = this.dsp.clock;
+    if (ck[6] !== this.cSeen) {
+      this.cSeen = ck[6];
+      var cb = this.cBuf;
+      cb[0] = ck[0]; cb[1] = ck[1]; cb[2] = ck[2]; cb[3] = ck[5]; cb[4] = ck[7];
+      this.port.postMessage(this.cMsg);
+    }
     if (this.slots && this.dsp.errorsPending[0] > 0) { this.eMsg.n = this.dsp.takeErrors(this.eBuf); this.port.postMessage(this.eMsg); }
     if (this.mOn) {
       this.mN += out[0].length;

@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+**Gate** (Peter's go on the mockups, 2026-11-06): a tempo-synced step volume / filter shaper, nc-fx's own, in Add
+right after Ensemble (Delay, Reverb, Hall, Ensemble, Gate, Flanger, ...). Unit code 14; plugin unit codes now start
+at 15 (`PLUGIN_BASE`; run-time only, never saved).
+
+- **Dials:** Rate (1/4, 1/8, 1/16, 1/8T), Swing, Depth, Mix; under More: Steps (8 or 16), Mode (Volume or
+  Filter), Smooth (1–20 ms), Spread, Resonance. Each of 16 steps has a level (0–100 %) and a shape (Hard, Pump,
+  Swell, Blip, Glide).
+- **Saves:** a Gate slot carries `pattern: { levels: [16], shapes: [16] }` (`src/gate.js` cleans it: out-of-range
+  values clamp, missing ones are Ducker's). Other slots never get one; old saves load exactly as before.
+- **Starting patterns** (`GATE_PATTERNS`): Ducker (where a new Gate starts), Tide, Stutter, Lope, Embers, Sieve.
+  No make-up gain (Peter: Trim is the answer).
+- **1/8T** restarts the pattern every bar (12 steps a bar; with 16 steps, 13–16 don't play).
+- **The beat clock.** The slot engine has one: it runs at the tempo from construction (a Gate moves while the
+  transport is stopped), `setBeat(beat, at)` lines it up on Play (Gates glide there in 10 ms), `freeRun(at)` lets it
+  run free on Stop, `setBar(beats)` sets the bar. `followClock` sends all three. The worklet reports the clock to
+  the main thread when it changes (`{t: 'clk'}`); `beatAt(time)` reads it back for a playhead (`gateStepAt`).
+- **API:** `setPattern`, `getPattern`, `setGatePattern` on a slot core; the pattern helpers from
+  `@netcomposer/nc-fx/gate` and the main entry. The panel (`ui.js`) shows a Pattern select on a Gate card.
+- Always sleeps when fully bypassed. 0 B allocation (line-ups and pattern changes included), no denormal creep, about
+  4–12 µs per 128-frame block over an empty chain (heaviest: Filter with Spread 100 %).
+
+**Fix found on the way** (no change to any sample):
+
+- **Hall allocated on the audio path:** about 4 KB a block (two boxed numbers a sample: its diffuser outputs started
+  as `undefined`). Now 0 B. The heap-delta gate had let it through because it takes the best of its windows.
+
 **Hall and Ensemble** (Peter's mockup, 2026-11-05): two new effects, nc-fx's own (not ASTRID's), in Add right after
 Reverb (Delay, Reverb, Hall, Ensemble, Flanger, Chorus, ...). Catalog entries carry `own: true`; ASTRID's saves leave
 them out and list them in `lossy` (`toAstridHacks`), as plugins.

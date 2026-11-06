@@ -50,7 +50,7 @@ function d(key, label, min, max, value, k, format, extra) {
 }
 function opts(list) { return list.map(function (p) { return { value: p[0], label: p[1] }; }); }
 
-/** Every effect, in ASTRID's HACK_DEFINITIONS order, with nc-fx's own (`own`: Hall, Ensemble) after Reverb.
+/** Every effect, in ASTRID's HACK_DEFINITIONS order, with nc-fx's own (`own`: Hall, Ensemble, Gate) after Reverb.
  * `hidden`: loads, plays and shows, but isn't offered in "Add". `fixed`: also one of createFxDsp's fixed chain
  * (drive -> delay -> plate). */
 export var CATALOG = [
@@ -99,6 +99,18 @@ export var CATALOG = [
     d('mix', 'Mix', 0, 100, 50, 4, WET, { dsp: C100, unit: '%' }),
     d('voices', 'Voices', 3, 6, 3, 5, { fmt: 'option' }, { step: null, options: opts([[3, '3'], [6, '6']]), more: true }),
     d('vibrato', 'Vibrato', 0, 100, 20, 6, PCT, { dsp: C100, unit: '%', more: true })] },
+  // nc-fx's own (2026-11-06, Peter's go): Gate, a tempo-synced step shaper. `pattern`: the slot also carries
+  // { levels, shapes } (src/gate.js), played through engine params 10-15. Starts on Ducker (GATE_PATTERNS).
+  { type: 'gate', label: 'Gate', own: true, tempoSynced: true, pattern: true, dials: [
+    d('rate', 'Rate', 4, 16, 4, 1, { fmt: 'option' }, { step: null, options: opts([[4, '1/4'], [8, '1/8'], [16, '1/16'], [12, '1/8T']]) }),
+    d('swing', 'Swing', 0, 100, 0, 3, PCT, { dsp: C100, unit: '%' }),
+    d('depth', 'Depth', 0, 100, 90, 4, PCT, { dsp: C100, unit: '%' }),
+    d('mix', 'Mix', 0, 100, 100, 5, WET, { dsp: C100, unit: '%' }),
+    d('steps', 'Steps', 8, 16, 8, 2, { fmt: 'option' }, { step: null, options: opts([[8, '8'], [16, '16']]), more: true }),
+    d('mode', 'Mode', 0, 1, 0, 6, { fmt: 'option' }, { step: null, options: opts([[0, 'Volume'], [1, 'Filter']]), more: true }),
+    d('smooth', 'Smooth', 1, 20, 4, 7, MS, { unit: 'ms', more: true }),
+    d('spread', 'Spread', 0, 100, 0, 8, PCT, { dsp: C100, unit: '%', more: true }),
+    d('res', 'Resonance', 0, 100, 20, 9, PCT, { dsp: C100, unit: '%', more: true })] },
   // ASTRID's own (hacks-astrid/mod.js).
   { type: 'flanger', label: 'Flanger', dials: [
     d('rate', 'Rate', 0, 100, 26, 1, { fmt: 'rate', law: L.rate }, { dsp: { law: L.rate } }),
@@ -144,8 +156,8 @@ export var CATALOG = [
 ];
 /** Every type that loads (older files included), in catalog order. */
 export var CATALOG_TYPES = CATALOG.map(function (e) { return e.type; });
-/** What "Add" offers: everything not hidden, in ASTRID's order with Hall and Ensemble after Reverb (Delay, Reverb,
- * Hall, Ensemble, Flanger, Chorus, Phaser, EQ, Drive, Compressor, Width). */
+/** What "Add" offers: everything not hidden, in ASTRID's order with Hall, Ensemble and Gate after Reverb (Delay,
+ * Reverb, Hall, Ensemble, Gate, Flanger, Chorus, Phaser, EQ, Drive, Compressor, Width). */
 export var CATALOG_MENU = CATALOG.filter(function (e) { return !e.hidden; }).map(function (e) { return e.type; });
 
 var ALIAS = { reverb: 'plate' };

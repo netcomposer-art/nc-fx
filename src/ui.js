@@ -13,6 +13,7 @@
 // animates; the user's own touch clears the mark.
 import { CATALOG_MENU, catalogEntry, formatDial } from './catalog.js';
 import { FX_UI_CSS } from './ui-style.js';
+import { GATE_PATTERNS, gatePatternName } from './gate.js';
 
 var STYLE_ID = 'nc-fx-ui-style';
 var uid = 0;
@@ -178,7 +179,7 @@ export function mountFxPanel(el, opts) {
     input.setAttribute('data-testid', 'nc-fx-' + c.ref + '-' + d.key);
     var onInput = function () {
       input.removeAttribute('data-modulated');
-      touch(c, d, +input.value);
+      touch(c, d, d.key === 'pattern' ? input.value : +input.value);
     };
     input.addEventListener('input', onInput);
     input.addEventListener('change', onInput);
@@ -188,8 +189,10 @@ export function mountFxPanel(el, opts) {
   }
   function touch(c, d, v) {
     touching = true;
-    fx.setParam(c.ref, d.key, v);
+    if (d.key === 'pattern') { if (v !== 'Custom') fx.setGatePattern(c.ref, v); }
+    else fx.setParam(c.ref, d.key, v);
     touching = false;
+    if (d.key === 'pattern') update(false);
   }
   function fieldOf(c, key) { for (var i = 0; i < c.fields.length; i++) if (c.fields[i].dial.key === key) return c.fields[i]; return null; }
 
@@ -265,6 +268,15 @@ export function mountFxPanel(el, opts) {
       head.appendChild(rm);
     }
     card.appendChild(head);
+    // A Gate (a pattern effect): its starting patterns first, as a select. The step strip is the host's (the Studio
+    // draws it with the kit); here a pattern is picked whole.
+    if (e.pattern && fx.setGatePattern) {
+      var pd = { key: 'pattern', label: 'Pattern', options: GATE_PATTERNS.map(function (g) { return { value: g.name, label: g.name }; }).concat([{ value: 'Custom', label: 'Custom' }]), format: { fmt: 'option' } };
+      var pf = field(c, pd);
+      pf.pattern = true;
+      c.fields.push(pf);
+      card.appendChild(pf.row);
+    }
     var more = null;
     e.dials.forEach(function (d) {
       var f = field(c, d);
@@ -309,6 +321,12 @@ export function mountFxPanel(el, opts) {
   }
 
   function show(c, f, fromHost) {
+    if (f.pattern) { // which starting pattern the Gate is on (or Custom)
+      var name = gatePatternName({ dials: fx.getState().chain.filter(function (s) { return s.id === c.ref; }).map(function (s) { return s.dials; })[0], pattern: fx.getPattern(c.ref) });
+      if (f.input.value !== name) f.input.value = name;
+      f.out.textContent = '';
+      return;
+    }
     var d = f.dial, v = fx.getParam(c.ref, d.key), w = d.stepWhen;
     if (v === undefined) return;
     if (w) { // drive_db: 0.1 dB steps while curve is Acid
@@ -360,7 +378,7 @@ export function mountFxPanel(el, opts) {
     var c = cardOf(ch.effect);
     if (!c) return;
     if (ch.key === 'bypass') { showHead(c); return; }
-    c.fields.forEach(function (f) { if (f.dial.key === ch.key || f.dial.stepWhen || f.dial.overriddenBy === ch.key) show(c, f, fromHost); });
+    c.fields.forEach(function (f) { if (f.pattern || f.dial.key === ch.key || f.dial.stepWhen || f.dial.overriddenBy === ch.key) show(c, f, fromHost); });
   });
   build();
   el.appendChild(root);

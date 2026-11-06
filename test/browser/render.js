@@ -220,8 +220,8 @@ async function main() {
     const add = q('[data-testid="nc-fx-add"]');
     // The catalog's Add menu (CATALOG_MENU): ASTRID's order, with nc-fx's own Hall and Ensemble right after Reverb
     // (Peter, 2026-11-05); the hidden filters are never offered.
-    check('slots panel: "Add a hack" offers the catalog\'s menu: ASTRID\'s order, Hall and Ensemble after Reverb (no filters)', add.getAttribute('aria-label') === 'Add a hack'
-      && [...add.options].map((o) => o.textContent).join() === 'Add a hack,Delay,Reverb,Hall,Ensemble,Flanger,Chorus,Phaser,EQ,Drive,Compressor,Width', [...add.options].map((o) => o.textContent).join());
+    check('slots panel: "Add a hack" offers the catalog\'s menu: ASTRID\'s order, Hall, Ensemble and Gate after Reverb (no filters)', add.getAttribute('aria-label') === 'Add a hack'
+      && [...add.options].map((o) => o.textContent).join() === 'Add a hack,Delay,Reverb,Hall,Ensemble,Gate,Flanger,Chorus,Phaser,EQ,Drive,Compressor,Width', [...add.options].map((o) => o.textContent).join());
     check('slots panel: a hidden filter from an old preset shows as a card and can be removed', qa('.nc-ui-fx').length === 1 && q('[data-testid="nc-fx-lowpass-1"] .nc-ui-fx-name').textContent === 'Low-pass filter');
     q('[data-testid="nc-fx-remove-lowpass-1"]').click();
     check('slots panel: remove', qa('.nc-ui-fx').length === 0 && fx.getChain().length === 0 && q('[data-testid="nc-fx-limiter"]').hidden);

@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { createFxChainDsp } from '../../src/chain.js';
 import { CATALOG } from '../../src/catalog.js';
 import { newSlot, slotProgram } from '../../src/slots.js';
+import { gatePreset } from '../../src/gate.js';
 
 const which = process.argv[2];
 if (which) {
@@ -21,7 +22,8 @@ if (which) {
     if (which === 'drive') s.dials.drive_db = 12;
     if (which === 'lowpass' || which === 'highpass') s.dials.cutoff = 50;
     if (which === 'delay' || which === 'plate') s.dials.mix = 40;
-    // hall and ensemble run at their defaults (Mix 25% and 50%).
+    // hall and ensemble run at their defaults (Mix 25% and 50%); gate at its heaviest (Sieve: Filter, Spread 100%).
+    if (which === 'gate') { const g = gatePreset('Sieve'); Object.assign(s.dials, g.dials, { spread: 100 }); s.pattern = g.pattern; }
     fx.add(1, which, 0);
     for (const [k, v] of slotProgram(s)) fx.set(1, k, v, 0, true);
     fx.order([1], 0, true);

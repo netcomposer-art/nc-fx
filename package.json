@@ -38,6 +38,10 @@
       "types": "./src/slots.d.ts",
       "default": "./src/slots.js"
     },
+    "./gate": {
+      "types": "./src/gate.d.ts",
+      "default": "./src/gate.js"
+    },
     "./plugin": {
       "types": "./src/plugin.d.ts",
       "default": "./src/plugin.js"

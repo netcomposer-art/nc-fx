@@ -1,5 +1,5 @@
 /** A catalog type: every effect nc-fx has (ASTRID's Hacks). */
-export type FxType = 'lowpass' | 'highpass' | 'bandpass' | 'delay' | 'plate' | 'flanger' | 'chorus' | 'phaser' | 'eq' | 'drive' | 'compressor' | 'width' | 'hall' | 'ensemble';
+export type FxType = 'lowpass' | 'highpass' | 'bandpass' | 'delay' | 'plate' | 'flanger' | 'chorus' | 'phaser' | 'eq' | 'drive' | 'compressor' | 'width' | 'hall' | 'ensemble' | 'gate';
 /** A dial law (hacks.ts): pow a * b^(v / div), or exp2 a * 2^(m * v / div); then Math.round or toFixed. */
 export interface FxLaw { pow?: [number, number]; exp2?: [number, number]; div: number; round?: true; fixed?: number; zeroNull?: true }
 /** How a dial is read out (see formatDial and src/catalog.js for each fmt). */
@@ -26,7 +26,7 @@ export interface FxCatalogDial {
   stepWhen?: ReadonlyArray<{ key: string; value: number; step: number }>;
   curve?: 'log'; overriddenBy?: string; exact?: true; minOn?: number; tempoSynced?: true;
 }
-export interface FxCatalogEntry { type: FxType; label: string; hidden?: true; fixed?: true; /** nc-fx's own effect (Hall, Ensemble), not one of ASTRID's hacks. */ own?: true; tempoSynced?: true; note?: string; dials: ReadonlyArray<FxCatalogDial>; plugin?: import('./plugin.js').FxPluginInfo }
+export interface FxCatalogEntry { type: FxType; label: string; hidden?: true; fixed?: true; /** nc-fx's own effect (Hall, Ensemble, Gate), not one of ASTRID's hacks. */ own?: true; /** The slot carries a step `pattern` (Gate). */ pattern?: true; tempoSynced?: true; note?: string; dials: ReadonlyArray<FxCatalogDial>; plugin?: import('./plugin.js').FxPluginInfo }
 
 export const CATALOG: ReadonlyArray<FxCatalogEntry>;
 export const CATALOG_TYPES: ReadonlyArray<FxType>;

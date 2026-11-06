@@ -88,11 +88,35 @@ export function followClock(fx, clock, opts) {
       if (p.beat > beat && p.bpm > 0) { var at = audioAt(p.beat); if (at !== undefined) fx.setTempo(p.bpm, at); }
     }
   }
+  // The beat clock (Gate): Play lines it up with the transport's beat (bar 1 = beat 0); Stop lets it run free at
+  // the tempo from where it is, so a Gate keeps moving while stopped. A snapshot (joining a running clock) lines up.
+  var beats = typeof fx.setBeat === 'function';
+  function bar() {
+    var m = tr && tr.meter, n = m && typeof m.beatsPerBar === 'number' ? m.beatsPerBar : 0;
+    if (beats && n >= 1 && typeof fx.setBar === 'function') fx.setBar(n);
+  }
+  function audioTime(s) {
+    if (!toAudio || typeof s !== 'number' || !isFinite(s)) return undefined;
+    var t = toAudio(s);
+    return typeof t === 'number' && isFinite(t) ? t : undefined;
+  }
+  function lineUp() {
+    if (!beats) return;
+    bar();
+    if (!tr || !tr.running) { fx.freeRun(); return; }
+    var b = now && typeof tr.beatAt === 'function' ? tr.beatAt(now()) : NaN;
+    if (isFinite(b)) fx.setBeat(b, audioAt(b));
+  }
   sync();
+  lineUp();
   if (!clock || typeof clock.onChange !== 'function') return function () {};
   return clock.onChange(function (c) {
     if (!c) return;
     if (c.kind === 'tempo' && c.bpm > 0) fx.setTempo(c.bpm, audioAt(c.atBeat));
-    else if (c.kind === 'snapshot' || c.kind === 'start') sync();
+    else if (c.kind === 'snapshot') { sync(); lineUp(); }
+    else if (c.kind === 'start') {
+      sync();
+      if (beats && typeof c.beat === 'number' && isFinite(c.beat)) { bar(); fx.setBeat(c.beat, audioTime(c.at)); }
+    } else if (c.kind === 'stop' && beats) fx.freeRun(audioTime(c.at));
   });
 }

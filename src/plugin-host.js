@@ -26,8 +26,8 @@
 //     it reads the clock once every 4096 loop turns, so a plugin's ordinary loops cost a decrement each.
 // Every buffer is made when the unit is made (on the control path); run() allocates nothing.
 
-/** Plugin unit type codes start here (after the 14 built-in units, UNIT_TYPES). */
-export var PLUGIN_BASE = 14;
+/** Plugin unit type codes start here (after the 15 built-in units, UNIT_TYPES). */
+export var PLUGIN_BASE = 15;
 /** The most frames a plugin's process() is given at once. */
 export var PLUGIN_BLOCK = 128;
 /** Params a plugin may have (the chain's 16 per box, less the on flag). */

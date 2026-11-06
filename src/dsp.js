@@ -304,6 +304,11 @@ export function createFxDsp(sampleRate, opts) {
     /** Tempo for synced params (the delay). A change glides the delay time (80 ms), tape-style. False if refused. */
     setTempo: function (bpm, frame, snap) { return schedule(EV_TEMPO, bpm, frame, snap ? 1 : 0); },
     getTempo: function () { return T[0]; },
+    /** The fixed chain has no Gate: its beat clock calls are accepted and do nothing. */
+    setBeat: function () { return true; },
+    freeRun: function () { return true; },
+    setBar: function () { return true; },
+    clock: E.B,
     /**
      * Panic: drop the delay and reverb tails now (or at a frame). fadeMs > 0 ramps the wet signal down over that
      * long first, then zeroes the lines a chunk per block and ramps back in (no click, no big fill). The instant

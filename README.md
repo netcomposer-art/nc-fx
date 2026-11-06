@@ -139,6 +139,7 @@ Every effect has On/Off (bypass). In the fixed chain the order is drive → dela
 | **Reverb** (`plate`, alias `reverb`) | Pre-delay 0–200 ms, Size 0–100 (0.5×–1.5×), Decay, Damping, Mix 0–100 % | `ncPlate*`: Dattorro plate (JAES 1997) |
 | **Hall** (`hall`, nc-fx's own) | Size 0–100 %, Decay 0.5–12 s, Pre-delay 0–250 ms, Tone 1.5–19 kHz, Mix 0–100 % (default 25 %); More: Low cut 0–1000 Hz (0 = off, default 120 Hz), Width 0–100 %, Motion 0–100 % | Diffusion (4 all-passes a side) into an 8-line feedback delay network (Hadamard mix, a damping low-pass and a decay gain per line, Decay = the 500 Hz T60), each line swept slowly (Motion) so no mode rings; 12 dB/oct low cut and mid/side width on the wet. Always sleeps when fully bypassed |
 | **Ensemble** (`ensemble`, nc-fx's own) | Rate (0.05–10 Hz), Depth, Width, Mix (default 50 %); More: Voices 3 / 6, Vibrato | The string machine's ensemble: three voices (six: two sets) of a 7 ms delay swept by a slow and a fast LFO, 120° apart, panned by Width; a 100 Hz low cut on the wet. Always sleeps when fully bypassed |
+| **Gate** (`gate`, nc-fx's own) | Rate 1/4, 1/8, 1/16, 1/8T; Swing 0–100 %; Depth; Mix (default 100 %); More: Steps 8 / 16, Mode Volume / Filter, Smooth 1–20 ms (default 4), Spread, Resonance (Filter). The slot also carries `pattern: {levels: [16], shapes: [16]}`. A new Gate starts on Ducker | A tempo-synced step shaper on the engine's beat clock (below). Each step has a level (0–100 %) and a shape: Hard, Pump, Swell, Blip, Glide. Volume scales the level; Filter opens a 12 dB/oct low-pass (90 Hz–18 kHz) instead (its resonance can ring up to about 2 dB over the input as a step opens). Gain moves through two one-poles (Smooth), so no step edge clicks (Stutter on a sine: under −90 dB above 4 kHz at 4 ms). 1/8T restarts the pattern every bar (12 steps a bar). No make-up gain: a pattern lowers the level by its duck (Ducker on a pad: about 1.3 dB). Always sleeps when fully bypassed |
 | **EQ** (`eq`) | Low, Mid, High −18…+18 dB; Mid at 0–100 (200 Hz–5 kHz); Mid Q 0–100 (0.3–6) | `ncEq*`: RBJ low shelf 150 Hz, bell, high shelf 6 kHz; flat is a wire |
 | **Compressor** (`compressor`) | Threshold −60…0 dB, Ratio 0–100 (1:1–20:1), Attack 1–100 ms, Release 10–1000 ms, Makeup 0–24 dB | `ncComp*`: feed-forward, stereo-linked, 6 dB soft knee |
 | **Width** (`width`) | Width 0–200 %, Balance L100…R100 | `ncWidth*`: mid/side |
@@ -339,6 +340,8 @@ createFxCore(ctx: BaseAudioContext, opts?: {
 | `getParam(effect, key)` | |
 | `getState()` / `setState(state, {at?})` | `{v: 1, chain: [{id, type, bypass, dials}]}` in the fixed order. Old or partial states and ASTRID arrays are migrated. |
 | `setTempo(bpm, at?)` / `getTempo()` | The delay follows the tempo, gliding over 80 ms like tape. |
+| `setBeat(beat, at?)` / `freeRun(at?)` / `setBar(beats, at?)` | Gate's beat clock. It runs from construction at the tempo, so a Gate moves while the transport is stopped. `setBeat` lines it up (Play: `beat`, 0 = bar 1, sounds at `at`; Gates glide 10 ms there, as ASTRID's gridded LFOs); `freeRun` (Stop) lets it run on free from where it is; `setBar` sets beats per bar (default 4) for 1/8T. `followClock` does all three. |
+| `beatAt(time?)` | The worklet's beat clock read back at an AudioContext time (default now): `{beat, bpm, locked, beatsPerBar}`, or `null` before its first report (the worklet reports when the clock changes, not per block). `locked` is false while it runs free. A Gate's playhead is `gateStepAt(dials, beat, beatsPerBar)`. |
 | `clear(at?)` / `clear({at?, fadeMs?})` | Panic: drops the delay and reverb tails. Instant by default, which also resets the drive's one-sample state. `fadeMs` (up to 1000) ramps the wet down first, zeroes the lines a chunk per block and ramps back in, with no click and no big fill on one block. Neither resets the limiter, so the dry signal through the lookahead carries on. |
 | `onChange(cb)` | `cb({effect, key, value})` runs after every change. It returns an unsubscribe function. |
 | `latencySamples` | 0 by default; 72 at 48 kHz with `limiter: 'lookahead'`. |
@@ -419,7 +422,14 @@ values equal to the ones already scheduled (unless `snap`).
   `followClock(fx, clock, {mapper? | toAudioTime?, now?})`, `applyTempoMap(fx, map, {fromBeat, toBeat, toAudioTime})`
   and `bpmOf`. `followClock` gives a late joiner the tempo playing now (`beatAt(now)` with a mapper or `now`,
   otherwise the transport's current tempo) and schedules later changes at their times. On a `'shared'` clock
-  without a mapper or `toAudioTime`, it applies changes at once and warns once.
+  without a mapper or `toAudioTime`, it applies changes at once and warns once. It also drives Gate's beat clock:
+  a start lines it up (`setBeat` at the start's beat and audio time), a stop lets it run free (`freeRun`), a snapshot
+  of a running clock lines it up with the beat playing now, and the meter's beats per bar go to `setBar`.
+- From `@netcomposer/nc-fx/gate` (and the main entry): Gate's patterns. `GATE_PATTERNS` (Ducker, Tide, Stutter, Lope,
+  Embers, Sieve: dials and steps), `gatePreset(name)`, `cleanPattern(raw)`, `packPattern(p)` (engine params 10–15),
+  `gatePatternName(slot)` (the picker's name, or `'Custom'`), `gateStepsPlayed(dials)`, `gateStepAt(dials, beat,
+  beatsPerBar?)` (the playhead), `GATE_SHAPES`, `GATE_SHAPE_LABELS`. A slot core has `setPattern(id, {levels?,
+  shapes?}, at?)`, `getPattern(id)` and `setGatePattern(id, name, at?)`.
 
 ## EQ graph
 
