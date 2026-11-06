@@ -157,7 +157,7 @@ test('v1 (the fixed chain) loads as three slots that sound exactly like createFx
 test('every catalog type has a slot program covering all of its engine params', () => {
   for (const e of CATALOG) {
     const p = slotProgram(newSlot(e.type));
-    assert.deepEqual(p.map((x) => x[0]).sort((a, b) => a - b), Array.from({ length: e.dials.length + 1 }, (_, i) => i));
+    assert.deepEqual(p.map((x) => x[0]).sort((a, b) => a - b), Array.from({ length: e.dials.length + 1 + (e.pattern ? 6 : 0) }, (_, i) => i));
   }
 });
 

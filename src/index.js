@@ -18,6 +18,8 @@ import { PLUGIN_ERRORS } from './plugin.js';
 export { PLUGIN_API, PLUGIN_ERRORS, validateManifest, validateRegistry, pluginEntryFromManifest, registerPlugin, loadPlugin, loadPluginFiles, MAX_DSP_BYTES, guardLoops, LOOP_GUARD, loadListedPlugin, fetchRegistry, sha256Integrity, pluginType, toWamDescriptor, toWamParameterInfo } from './plugin.js';
 export { pluginEntries, onPluginEntry, isPluginType };
 export { watchAudioStall } from './watchdog.js';
+import { GATE_SHAPES, GATE_SHAPE_LABELS, GATE_PATTERNS, GATE_DEFAULT, GATE_STEPS, gatePreset, cleanPattern, packPattern, gatePatternName, gateStepAt, gateStepsPlayed, gateCurve } from './gate.js';
+export { GATE_SHAPES, GATE_SHAPE_LABELS, GATE_PATTERNS, GATE_DEFAULT, GATE_STEPS, gatePreset, cleanPattern, packPattern, gatePatternName, gateStepAt, gateStepsPlayed, gateCurve };
 import { SLOTS_VERSION, DEFAULT_SLOTS, migrateSlots, sanitizeSlots, newSlot, slotName, moveSlot, slotProgram, toAstridHacks, toAstridDocument } from './slots.js';
 export { EQ_LOW_HZ, EQ_HIGH_HZ, EQ_RANGE_DB, eqBands, eqResponse, eqCoefficients, eqGraph, eqPatchDials, eqResetDials, fxSpectrum } from './eq.js';
 
@@ -80,7 +82,7 @@ function createHost(ctx, o, start, fold) {
   input.connect(dry);
   dry.connect(output);
   wet.connect(output);
-  var H = { node: null, status: 'loading', error: null, disposed: false, listeners: [], bpm: bpm, mUsers: 0, lv: null, lvAt: 0 };
+  var H = { node: null, status: 'loading', error: null, disposed: false, listeners: [], bpm: bpm, mUsers: 0, lv: null, lvAt: 0, clk: null };
   var startOpts = start(bpm);
 
   H.post = function (msg) {
@@ -136,6 +138,7 @@ function createHost(ctx, o, start, fold) {
     H.node.port.onmessage = function (e) {
       var m = e.data;
       if (m && m.t === 'lv' && H.mUsers > 0) { H.lv = m.d; H.lvAt = nowMs(); }
+      else if (m && m.t === 'clk' && m.d) H.clk = { beat: m.d[0], frame: m.d[1], perFrame: m.d[2], locked: m.d[3] === 1, bar: m.d[4] || 4 };
       else if (m && m.t === 'perr' && H.onPluginError && m.d) for (var j = 0; j < (m.n | 0); j++) H.onPluginError(m.d[2 * j], m.d[2 * j + 1]);
     };
     input.connect(H.node);
@@ -207,6 +210,36 @@ function createHost(ctx, o, start, fold) {
       H.emit({ effect: null, key: 'tempo', value: H.bpm });
     },
     getTempo: function () { return H.bpm; },
+    /**
+     * Line the beat clock up (Play): `beat` (transport beats, 0 = bar 1) sounds at AudioContext time `at` (omitted =
+     * now). Gates follow it, gliding 10 ms to the new place. followClock() calls this on every start.
+     */
+    setBeat: function (beat, at) {
+      var b = finiteOr(beat, NaN);
+      if (b !== b || H.disposed || H.tooFar(at)) return;
+      H.post({ t: 'beat', beat: b, when: H.whenOf(at) });
+    },
+    /** The transport stopped (at `at`): the beat clock runs on at the tempo from there, free. */
+    freeRun: function (at) {
+      if (H.disposed || H.tooFar(at)) return;
+      H.post({ t: 'free', when: H.whenOf(at) });
+    },
+    /** Beats per bar (1-16, default 4): Gate's 1/8T restarts the pattern every bar. */
+    setBar: function (beats, at) {
+      var b = Math.round(finiteOr(beats, NaN));
+      if (!(b >= 1 && b <= 16) || H.disposed || H.tooFar(at)) return;
+      H.post({ t: 'bar', beats: b, when: H.whenOf(at) });
+    },
+    /**
+     * The worklet's beat clock at AudioContext time `time` (default now): { beat, bpm, locked, beatsPerBar }, or null
+     * before the worklet has reported. `locked`: lined up with Play; false while it runs free (stopped).
+     */
+    beatAt: function (time) {
+      var c = H.clk;
+      if (!c) return null;
+      var t = typeof time === 'number' && isFinite(time) ? time : ctx.currentTime;
+      return { beat: c.beat + (t * ctx.sampleRate - c.frame) * c.perFrame, bpm: c.perFrame * 60 * ctx.sampleRate, locked: c.locked, beatsPerBar: c.bar };
+    },
     /**
      * Panic: drop the delay and reverb tails now, or at an AudioContext time: clear(at) or clear({at, fadeMs}).
      * fadeMs > 0 (max 1000) ramps the wet down first and back in after (no click). The instant clear also
@@ -439,7 +472,36 @@ function createSlotCore(ctx, o) {
     if (!slot) return undefined;
     return key === 'bypass' ? slot.bypass : slot.dials[key];
   };
-  /** A JSON-safe copy: {v: 2, chain: [{id, type, bypass, dials}]}, first to last. */
+  /**
+   * A Gate's steps: { levels: [16] (0-100), shapes: [16] (0-4) }; a partial pattern changes only what it has (e.g.
+   * { levels } after a drag). Returns the stored pattern, or undefined when `ref` has no pattern.
+   */
+  core.setPattern = function (ref, pattern, at) {
+    var slot = find(ref);
+    if (!slot || !slot.pattern || H.disposed || H.tooFar(at)) return undefined;
+    var p = pattern && typeof pattern === 'object' ? pattern : {};
+    var next = cleanPattern({ levels: Array.isArray(p.levels) ? p.levels : slot.pattern.levels, shapes: Array.isArray(p.shapes) ? p.shapes : slot.pattern.shapes });
+    var p0 = {};
+    slotProgram(slot).forEach(function (x) { p0[x[0]] = x[1]; });
+    slot.pattern = next;
+    var uid = uids[slot.id], when = H.whenOf(at);
+    if (uid) slotProgram(slot).forEach(function (x) { if (p0[x[0]] !== x[1]) H.post({ t: 'ps', uid: uid, k: x[0], v: x[1], when: when }); });
+    H.emit({ effect: slot.id, key: 'pattern', value: JSON.parse(JSON.stringify(next)) });
+    return JSON.parse(JSON.stringify(next));
+  };
+  core.getPattern = function (ref) {
+    var slot = find(ref);
+    return slot && slot.pattern ? JSON.parse(JSON.stringify(slot.pattern)) : undefined;
+  };
+  /** Put a Gate on one of GATE_PATTERNS by name: its dials and its steps. True if it was a Gate and the name known. */
+  core.setGatePattern = function (ref, name, at) {
+    var slot = find(ref), g = gatePreset(name);
+    if (!slot || !slot.pattern || !g || H.disposed || H.tooFar(at)) return false;
+    Object.keys(g.dials).forEach(function (k) { core.setParam(slot.id, k, g.dials[k], at); });
+    core.setPattern(slot.id, g.pattern, at);
+    return true;
+  };
+  /** A JSON-safe copy: {v: 2, chain: [{id, type, bypass, dials, pattern?}]}, first to last. */
   core.getState = function () { return JSON.parse(JSON.stringify(state)); };
   /** Load any saved chain (v2, v1, ASTRID's hacks, widgets or schema-2 document): click-free, as ASTRID's sync. */
   core.setState = function (s, setOpts) {

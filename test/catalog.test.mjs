@@ -10,14 +10,14 @@ const H = await astridHacks();
 // nc-fx's names for ASTRID's dials where they differ.
 const KEY = (type, key) => (type === 'delay' && key === 'wet' ? 'mix' : key);
 
-// nc-fx's own effects (Hall, Ensemble): not ASTRID's, checked in test/hall-ensemble.test.mjs.
+// nc-fx's own effects (Hall, Ensemble, Gate): not ASTRID's, checked in test/hall-ensemble.test.mjs and test/gate.test.mjs.
 const OWN = CATALOG.filter((e) => e.own).map((e) => e.type);
 
 test('types, order, labels, notes, hidden and the Add menu are ASTRID\'s (with nc-fx\'s own Hall and Ensemble after Reverb)', () => {
-  assert.deepEqual(OWN, ['hall', 'ensemble']);
+  assert.deepEqual(OWN, ['hall', 'ensemble', 'gate']);
   assert.deepEqual(CATALOG_TYPES.filter((t) => !OWN.includes(t)), H.HACK_TYPES);
   assert.deepEqual(CATALOG_MENU.filter((t) => !OWN.includes(t)), H.HACK_MENU.map((d) => d.type));
-  assert.deepEqual(CATALOG_MENU.slice(0, 5), ['delay', 'plate', 'hall', 'ensemble', 'flanger']);
+  assert.deepEqual(CATALOG_MENU.slice(0, 6), ['delay', 'plate', 'hall', 'ensemble', 'gate', 'flanger']);
   for (const def of H.HACK_DEFINITIONS) {
     const e = catalogEntry(def.type);
     assert.equal(e.label, def.label);
@@ -84,7 +84,8 @@ test('the catalog is plain JSON, each dial has its own engine param, and EFFECTS
   for (const e of CATALOG) {
     const ks = e.dials.map((d) => d.k);
     assert.deepEqual(ks.slice().sort((a, b) => a - b), Array.from({ length: ks.length }, (_, i) => i + 1), e.type);
-    assert.equal(UNIT_NPARAMS[UNIT[e.type]], ks.length + 1, e.type);
+    // A pattern effect (Gate) also has its steps in six params after its dials (src/gate.js packPattern).
+    assert.equal(UNIT_NPARAMS[UNIT[e.type]], ks.length + 1 + (e.pattern ? 6 : 0), e.type);
   }
   assert.deepEqual(EFFECTS.map((e) => e.type), ['drive', 'delay', 'plate']);
   for (const e of EFFECTS) for (const d of e.dials) {

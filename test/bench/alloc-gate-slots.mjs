@@ -7,6 +7,7 @@ import { PerformanceObserver } from 'node:perf_hooks';
 import { createFxChainDsp } from '../../src/chain.js';
 import { CATALOG, dialDsp } from '../../src/catalog.js';
 import { newSlot, slotProgram } from '../../src/slots.js';
+import { gatePreset, packPattern } from '../../src/gate.js';
 
 const BLOCKS = 10000, WARM = +(process.env.WARM || 20000), TRIES = +(process.env.TRIES || 3);
 function window(step) {
@@ -46,12 +47,18 @@ function effectScenario(type) {
     for (const v of vals) moves.push([d.k, dialDsp(d, v)]);
   }
   const boxed = moves.map(([k, v]) => [k, { v }.v]);
+  // Gate's steps (params 10-15, packed: src/gate.js) move like dials; line-ups at boxed beats.
+  if (e.pattern) for (const name of ['Tide', 'Stutter', 'Sieve']) for (const [k, v] of packPattern(gatePreset(name).pattern)) boxed.push([k, { v }.v]);
+  // Whole beats: a fractional one boxes once as it crosses the rarely called setBeat() (8 B a Play press, beside the
+  // message's own structured clone); the engine's handling of a line-up allocates nothing.
+  const beats = [0, 3, 17, 100000];
   const L = new Float32Array(128), R = new Float32Array(128);
   let f = 0;
   return window((k) => {
     if (k % 3 === 0) { const m = boxed[(k / 3) % boxed.length]; fx.set(2, m[0], m[1], f + 40); }
     if (k % 97 === 0) fx.set(2, 0, (k / 97) & 1, f + 7);
     if (k % 211 === 0) fx.setTempo(100 + (k % 50), f + 3);
+    if (k % 157 === 0) { fx.setBeat(beats[(k / 157) & 3], f + 11); if ((k / 157) & 1) fx.freeRun(f + 60); } // Gate's beat clock: Play, Stop
     sine(L, f); for (let i = 0; i < 128; i++) R[i] = L[i] * 0.6;
     fx.process(L, R, L, R, 128, f); f += 128;
   });

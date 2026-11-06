@@ -1,3 +1,5 @@
+import type { GatePattern } from './gate.js';
+export * from './gate.js';
 import type { FxState, FxEffectName, FxEffectType, FxEffectDef } from './params.js';
 import type { FxPanel, FxPanelOptions } from './ui.js';
 export type { FxState, FxSlot, FxEffectName, FxEffectType, FxEffectDef, FxDialDef, FxParamInfo } from './params.js';
@@ -50,7 +52,7 @@ export interface FxCoreOptions {
    */
   slots?: true | number;
 }
-export interface FxChange { effect: FxEffectType | null; key: string | null; value: number | boolean | null }
+export interface FxChange { effect: FxEffectType | null; key: string | null; value: number | boolean | GatePattern | null }
 
 export interface FxCore {
   readonly input: GainNode;
@@ -77,6 +79,14 @@ export interface FxCore {
   setState(state: unknown, opts?: { at?: number }): void;
   setTempo(bpm: number, at?: number): void;
   getTempo(): number;
+  /** Line the beat clock up (Play): `beat` (0 = bar 1) at AudioContext time `at` (omitted = now). Gates follow it. */
+  setBeat(beat: number, at?: number): void;
+  /** The transport stopped: the beat clock runs on free at the tempo (Gates keep moving). */
+  freeRun(at?: number): void;
+  /** Beats per bar (1-16, default 4): 1/8T restarts every bar. */
+  setBar(beats: number, at?: number): void;
+  /** The worklet's beat clock at AudioContext time `time` (default now), or null before it reports. */
+  beatAt(time?: number): { beat: number; bpm: number; locked: boolean; beatsPerBar: number } | null;
   /** Drop the delay and reverb tails. fadeMs > 0 (max 1000) fades the wet out and back in. Not the limiter. */
   clear(at?: number | { at?: number; fadeMs?: number }): void;
   onChange(cb: (change: FxChange) => void): () => void;
@@ -110,6 +120,11 @@ export interface FxSlotCore extends Omit<FxCore, 'setParam' | 'getParam' | 'getS
   meter(ref?: string): FxMeter;
   /** ASTRID's saved-hacks shape (settings.hacks) for this chain, and what ASTRID can't hold. */
   toAstrid(): { hacks: AstridHackSlot[]; lossy: string[] };
+  /** A Gate's steps (a partial pattern changes only what it has). The stored pattern, or undefined if `ref` has none. */
+  setPattern(ref: string, pattern: Partial<GatePattern>, at?: number): GatePattern | undefined;
+  getPattern(ref: string): GatePattern | undefined;
+  /** Put a Gate on a starting pattern (GATE_PATTERNS) by name: its dials and steps. */
+  setGatePattern(ref: string, name: string, at?: number): boolean;
 }
 export interface FxSlots extends FxSlotCore {
   mount(el: HTMLElement, opts?: Omit<FxPanelOptions, 'fx'>): Promise<FxPanel>;

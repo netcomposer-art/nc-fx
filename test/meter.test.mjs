@@ -80,13 +80,14 @@ test('fixed chain: the chain input and output peaks', () => {
 });
 
 function processor(po) {
-  const reg = {}, posted = [];
-  class AudioWorkletProcessor { constructor() { this.port = { onmessage: null, postMessage: (m) => posted.push({ t: m.t, d: Float32Array.from(m.d) }) }; } }
+  const reg = {}, posted = [], clocks = [];
+  // The beat clock's reports (Gate: once at the start, then only when the clock changes) are kept apart.
+  class AudioWorkletProcessor { constructor() { this.port = { onmessage: null, postMessage: (m) => (m.t === 'clk' ? clocks : posted).push({ t: m.t, d: Float32Array.from(m.d) }) }; } }
   const scope = vm.createContext({ AudioWorkletProcessor, sampleRate: SR, currentFrame: 0, registerProcessor: (n, c) => { reg[n] = c; } });
   vm.runInContext(source, scope);
   const p = new reg['nc-fx@1']({ processorOptions: po });
   const block = (inL) => { const out = [new Float32Array(128), new Float32Array(128)]; p.process([[inL, inL]], [out]); };
-  return { p, posted, block, scope };
+  return { p, posted, clocks, block, scope };
 }
 
 test('worklet: reports only while a meter is open, about 30 a second, silence once', () => {
@@ -112,6 +113,7 @@ test('worklet: reports only while a meter is open, about 30 a second, silence on
   const off = w.posted.length;
   for (let i = 0; i < 100; i++) w.block(loud);
   assert.equal(w.posted.length, off, 'off: no reports');
+  assert.equal(w.clocks.length, 1, 'the beat clock reported once (it never changed)');
 });
 
 test('host: fxMeter handles are cached per ref, opens are counted over the chain, peaks by effect id', async () => {

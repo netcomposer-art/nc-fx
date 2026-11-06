@@ -26,8 +26,11 @@ import { NC_PLUGINS, PLUGIN_BASE, PLUGIN_BLOCK, OP_ERR, pluginCode, createPlugin
 
 var EV_ADD = -1000;   // EV_ADD - b: box b goes live
 var EV_ORDER = -2000; // EV_ORDER - l: order list l
+var EV_BEAT = -3;     // the beat clock's line-up (Gate): beat v at the event's frame
+var EV_FREE = -4;     // the beat clock runs free from the event's frame (the transport stopped)
+var EV_BAR = -5;      // beats per bar (1/8T restarts each bar)
 var MAXK = 16;        // params per box in the event index (b * MAXK + k)
-var NTYPES = 14;
+var NTYPES = 15;
 var MAX_SLOTS = 8;
 
 /**
@@ -151,9 +154,23 @@ export function createFxChainDsp(sampleRate, opts) {
       if (i === EV_TEMPO) {
         if (v !== v) continue;
         T[0] = v < 20 ? 20 : v > 400 ? 400 : v;
+        // The beat clock keeps its beat at this frame and goes on at the new tempo.
+        E.B[0] += (T[4] - E.B[1]) * E.B[2]; E.B[1] = T[4]; E.B[2] = T[0] / (60 * sr); E.B[6] += 1;
         for (b = 0; b < NB; b++) if (STATE[b] !== 0 && TYPE[b] === 1) CUR[b].retarget(snap);
         continue;
       }
+      if (i === EV_BEAT) { // the host's line-up (Play): beat v at this frame; a move of over 1 ms glides (Gate)
+        if (v !== v) continue;
+        var was = E.B[0] + (T[4] - E.B[1]) * E.B[2], tol = E.B[2] * 0.001 * sr;
+        E.B[0] = v; E.B[1] = T[4]; E.B[5] = 1; E.B[6] += 1;
+        if (was - v > tol || v - was > tol) E.B[4] += 1;
+        continue;
+      }
+      if (i === EV_FREE) { // Stop: the clock runs on from where it is, free (unlocked)
+        E.B[0] += (T[4] - E.B[1]) * E.B[2]; E.B[1] = T[4]; E.B[5] = 0; E.B[6] += 1;
+        continue;
+      }
+      if (i === EV_BAR) { if (v >= 1 && v <= 16) { E.B[7] = Math.round(v); E.B[6] += 1; } continue; }
       if (i === EV_CLEAR) {
         if (v > 0) {
           var fs = (v > 1000 ? 1000 : v) * 0.001 * sr;
@@ -396,6 +413,14 @@ export function createFxChainDsp(sampleRate, opts) {
     /** The uids playing now, in order (a new array: for tests and hosts, not the audio path). */
     playing: function () { var out = []; for (var m = 0; m < ON[0]; m++) out.push(UID[ORD[m]]); return out; },
     setTempo: function (bpm, frame, snap) { return schedule(EV_TEMPO, bpm, frame, snap ? 1 : 0); },
+    /** Line the beat clock up (Play): `beat` (transport beats, 0 = bar 1) at `frame`. Gates follow it. */
+    setBeat: function (beat, frame) { return schedule(EV_BEAT, beat, frame, 0); },
+    /** The transport stopped: the beat clock runs on at the tempo from `frame`, free. */
+    freeRun: function (frame) { return schedule(EV_FREE, 0, frame, 0); },
+    /** Beats per bar (default 4): 1/8T restarts the pattern every bar. */
+    setBar: function (beats, frame) { return schedule(EV_BAR, beats, frame, 0); },
+    /** The beat clock (E.B: anchor beat, anchor frame, beats per frame, ..., locked, changes, beats per bar). */
+    clock: E.B,
     getTempo: function () { return T[0]; },
     /** As createFxDsp's: instant (every effect's state, as ASTRID's ncChainClear) or fadeMs (delay and reverb tails). */
     clear: function (frame, fadeMs) { return schedule(EV_CLEAR, fadeMs > 0 ? fadeMs : 0, frame, 0); },
@@ -410,6 +435,7 @@ export function createFxChainDsp(sampleRate, opts) {
         u.set(-1, false); u.retarget(-1); // keep them optimised (see createFxDsp's due())
       }
       T[2] = 0; T[3] = 0;
+      E.B[3] = start;
       if (MT[0] === 1) meterInput(inL, inR, frames, MC);
       admit();
       var i = 0;

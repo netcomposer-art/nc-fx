@@ -2,8 +2,9 @@
 // Imports ASTRID's saves losslessly and exports them back.
 // nc-fx was created by Peter Semmelhack (https://psem.me/). MIT License.
 //
-// State: { v: 2, chain: [{ id, type, bypass, dials }] }, first to last (the limiter is fixed after the last and is
-// not a slot). ids are ASTRID's ('delay-1', 'drive-2'); dials are in UI units (catalog dials). JSON-safe.
+// State: { v: 2, chain: [{ id, type, bypass, dials, pattern? }] }, first to last (the limiter is fixed after the last and is
+// not a slot). ids are ASTRID's ('delay-1', 'drive-2'); dials are in UI units (catalog dials). A Gate also has `pattern` (src/gate.js).
+// JSON-safe.
 //
 // Loads (never throws; anything unreadable is dropped and reported):
 //   - nc-fx v2 (this), and v1 (the fixed chain: its drive, delay and plate become three slots, as they play);
@@ -14,6 +15,7 @@
 //     ({ schema: 2, chain: [...widgets, limiter] }): each param back to its dial through the inverse of hacks.ts's law.
 import { CATALOG_TYPES, catalogEntry, catalogType, dialDsp, lawValue, delaySeconds, ASTRID_NOTES, isPluginType } from './catalog.js';
 import { clampDial, dialStep, astridBeats } from './params.js';
+import { gatePreset, GATE_DEFAULT, cleanPattern, packPattern } from './gate.js';
 
 export var SLOTS_VERSION = 2;
 /** ASTRID's MAX_HACKS: the default number of slots. */
@@ -55,6 +57,7 @@ export function newSlot(type, chain) {
   e.dials.forEach(function (d) { dials[d.key] = d.default; });
   var s = { id: base + '-' + n, type: e.type, bypass: false, dials: dials };
   if (e.plugin) s.plugin = pluginRefOf(e);
+  if (e.pattern) { var g = gatePreset(GATE_DEFAULT); Object.assign(s.dials, g.dials); s.pattern = g.pattern; } // a new Gate: Ducker
   return s;
 }
 /** "Drive", or "Drive 2" for a second one (ASTRID's nameOf). */
@@ -153,6 +156,7 @@ export function migrateSlots(raw, max) {
       // Registered here: the ref is the plugin that plays (its version and where it was loaded from).
       slot.plugin = pluginRefOf(e);
     }
+    if (e.pattern) slot.pattern = cleanPattern(item.pattern); // Gate's steps (src/gate.js); missing: Ducker's
     out.push(slot);
   }
   return { state: { v: SLOTS_VERSION, chain: out }, dropped: dropped, notes: notes };
@@ -165,6 +169,7 @@ export function slotProgram(slot) {
   var e = catalogEntry(slot.type), out = [[0, slot.bypass ? 0 : 1]];
   if (!e) return out; // a missing plugin: nothing to play
   e.dials.forEach(function (d) { out.push([d.k, dialDsp(d, slot.dials[d.key])]); });
+  if (e.pattern) out = out.concat(packPattern(slot.pattern));
   return out;
 }
 

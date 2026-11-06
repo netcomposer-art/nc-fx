@@ -22,6 +22,11 @@ class NcFxProcessor extends AudioWorkletProcessor {
     if (this.slots) { if (po.chain) this.sync(po.chain, po.order || [], 0); }
     else if (po.program) this.dsp.load(po.program, 0, true);
     this.alive = true;
+    // The beat clock goes to the main thread when it changes (tempo, line-up, stop; a few times a session), as
+    // { t: 'clk', d: [beat, frame, beats per frame, locked, beats per bar] }: the host reads the playhead from it.
+    this.cSeen = -1;
+    this.cBuf = new Float64Array(5);
+    this.cMsg = { t: 'clk', d: this.cBuf };
     // Level taps (a host meter is open): every METER_S the peaks go out as one small message, { t: 'lv', d }, the same
     // buffer each time (postMessage copies it). Silence goes out once, then nothing until there is sound again.
     this.mOn = false;
@@ -69,6 +74,10 @@ class NcFxProcessor extends AudioWorkletProcessor {
       case 'p': if (!this.slots) d.set(m.i, m.v, frame, snap); break;
       case 'load': if (!this.slots && m.program) d.load(m.program, frame, snap); break;
       case 'tempo': d.setTempo(m.bpm, frame, snap); break;
+      // The beat clock (Gate): a line-up (Play), free-running (Stop), beats per bar.
+      case 'beat': d.setBeat(m.beat, frame); break;
+      case 'free': d.freeRun(frame); break;
+      case 'bar': d.setBar(m.beats, frame); break;
       case 'clear': d.clear(frame, m.fadeMs); break;
       // Slot chain: add an effect (its params follow as snapped 'ps'), set one param, the order to play.
       case 'add':
@@ -107,6 +116,13 @@ class NcFxProcessor extends AudioWorkletProcessor {
     var mi = inputs.length > 1 ? inputs[1] : null;
     var mod = mi && mi.length > 0 ? mi[0] : null;
     this.dsp.process(inL, inR, out[0], out.length > 1 ? out[1] : null, out[0].length, currentFrame, mod);
+    var ck = this.dsp.clock;
+    if (ck[6] !== this.cSeen) {
+      this.cSeen = ck[6];
+      var cb = this.cBuf;
+      cb[0] = ck[0]; cb[1] = ck[1]; cb[2] = ck[2]; cb[3] = ck[5]; cb[4] = ck[7];
+      this.port.postMessage(this.cMsg);
+    }
     if (this.slots && this.dsp.errorsPending[0] > 0) { this.eMsg.n = this.dsp.takeErrors(this.eBuf); this.port.postMessage(this.eMsg); }
     if (this.mOn) {
       this.mN += out[0].length;

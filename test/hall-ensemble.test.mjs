@@ -78,7 +78,7 @@ function bandT60([L, R], fc) {
 }
 
 test('catalog: Hall and Ensemble as mocked (dials, defaults, readouts), after Reverb in Add, nc-fx\'s own', () => {
-  assert.deepEqual(CATALOG_MENU.slice(0, 5), ['delay', 'plate', 'hall', 'ensemble', 'flanger']);
+  assert.deepEqual(CATALOG_MENU.slice(0, 4), ['delay', 'plate', 'hall', 'ensemble']);
   const hall = catalogEntry('hall'), ens = catalogEntry('ensemble');
   assert.equal(hall.label, 'Hall'); assert.equal(ens.label, 'Ensemble');
   assert.ok(hall.own && ens.own && !hall.hidden && !ens.hidden);
