@@ -97,7 +97,8 @@ The defaults change nothing you didn't ask for:
 | Drive (12 dB) | 34.3 | Delay | 10.7 | Band-pass | 9.6 |
 | EQ | 8.5 | Width | 5.8 | High-pass | 5.5 |
 
-A block is 2667 µs at 48 kHz, so three of the heaviest (reverb, phaser, drive) use about 5 % of the audio thread.
+Crunch (26 kHz, 12-bit) is 5.8 µs a block (3.2 over the empty chain's 2.6 measured the same day): about 0.1 % of
+the audio thread. A block is 2667 µs at 48 kHz, so three of the heaviest (reverb, phaser, drive) use about 5 % of the audio thread.
 
 **CPU: use `'hold'` if you don't need tails across bypass.** With `'run'` a fully bypassed chain still costs nearly
 everything: in Petra's bench, 78 of 89 µs per 128-frame block. `'run'` is the default only because it is ASTRID's
