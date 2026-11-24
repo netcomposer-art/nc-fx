@@ -10,7 +10,7 @@ import { createFxChainDsp } from '../src/chain.js';
 import { CATALOG, CATALOG_MENU, catalogEntry, catalogDial, formatDial, dialDsp } from '../src/catalog.js';
 import { newSlot, slotProgram, sanitizeSlots, toAstridHacks, toAstridDocument } from '../src/slots.js';
 import { createFxCore } from '../src/index.js';
-import { UNIT, UNIT_NPARAMS, createFxEnv, createUnit } from '../src/units.js';
+import { UNIT, UNIT_NPARAMS, UNIT_TYPES, createFxEnv, createUnit } from '../src/units.js';
 import { PLUGIN_BASE } from '../src/plugin-host.js';
 import { mockContext } from './mock-audio.mjs';
 
@@ -97,7 +97,7 @@ test('catalog: Hall and Ensemble as mocked (dials, defaults, readouts), after Re
   assert.equal(formatDial(catalogDial('hall', 'low_cut'), 0), 'off');
   assert.deepEqual(catalogDial('ensemble', 'voices').options.map((o) => o.value), [3, 6]);
   for (const e of [hall, ens]) assert.equal(UNIT_NPARAMS[UNIT[e.type]], e.dials.length + 1);
-  assert.ok(PLUGIN_BASE >= 14, 'plugin codes start after the built-in units');
+  assert.ok(PLUGIN_BASE >= UNIT_TYPES.length, 'plugin codes start after the built-in units');
 });
 
 test('parameter ranges: every dial clamps to its unit\'s range; NaN is refused', () => {
