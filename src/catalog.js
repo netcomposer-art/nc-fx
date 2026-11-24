@@ -18,7 +18,7 @@
 //          db (signed, U+2212 minus; zero: text at 0), pct, wet ('% wet'), signedPct, num (v + suffix),
 //          fixed (((v / div) + add).toFixed(digits) + suffix), hz (law(v) in Hz; astrid: kHz above 1000 as hacks.ts
 //          fmtHz; zero: text when the law gives null or v is 0; off: text at or above `offAt`), q ('Q ' + law
-//          to 1 decimal), ratio (law to 1 decimal + ':1'), rate (hacks.ts fmtRate), balance, option (the option's
+//          to 1 decimal), khz (law(v) in kHz to 1 decimal: '26.0 kHz'), ratio (law to 1 decimal + ':1'), rate (hacks.ts fmtRate), balance, option (the option's
 //          label), stages (v + ' stages'), tempoMs (the delay time in ms at the tempo), freeBeats (beats_free).
 
 var NOTES = [[0.125, '1/32'], [0.25, '1/16'], [0.5, '1/8'], [0.75, '1/8 dotted'], [1, '1/4'], [1.5, '1/4 dotted'], [2, '1/2']];
@@ -39,7 +39,8 @@ var L = {
   rate: { pow: [0.05, 200], div: 100, fixed: 3 }, // hackRateHz
   driveTone: { exp2: [500, 5], div: 99, round: true }, // Bass's drive tone (500 Hz * 2^(5t), t = v / 99)
   delayTone: { exp2: [800, 4], div: 99, round: true }, // Bass's delay tone (800 Hz * 2^(4t))
-  hallTone: { exp2: [1500, 3.7], div: 100, round: true } // Hall's tone: 1.5 kHz at 0, 7.0 kHz at 60, 19 kHz at 100
+  hallTone: { exp2: [1500, 3.7], div: 100, round: true }, // Hall's tone: 1.5 kHz at 0, 7.0 kHz at 60, 19 kHz at 100
+  crunchRate: { pow: [4000, 44100 / 4000], div: 100, round: true } // Crunch's rate: 4 kHz at 0, 26 kHz at 78, 44.1 kHz (clean) at 100
 };
 var WET = { fmt: 'wet' }, PCT = { fmt: 'pct' }, DB = { fmt: 'db' }, SPCT = { fmt: 'signedPct' }, MS = { fmt: 'num', suffix: ' ms' };
 var C100 = { div: 100 };
@@ -50,7 +51,7 @@ function d(key, label, min, max, value, k, format, extra) {
 }
 function opts(list) { return list.map(function (p) { return { value: p[0], label: p[1] }; }); }
 
-/** Every effect, in ASTRID's HACK_DEFINITIONS order, with nc-fx's own (`own`: Hall, Ensemble, Gate) after Reverb.
+/** Every effect, in ASTRID's HACK_DEFINITIONS order, with nc-fx's own (`own`: Hall, Ensemble, Gate, Crunch) after Reverb.
  * `hidden`: loads, plays and shows, but isn't offered in "Add". `fixed`: also one of createFxDsp's fixed chain
  * (drive -> delay -> plate). */
 export var CATALOG = [
@@ -111,6 +112,12 @@ export var CATALOG = [
     d('smooth', 'Smooth', 1, 20, 4, 7, MS, { unit: 'ms', more: true }),
     d('spread', 'Spread', 0, 100, 0, 8, PCT, { dsp: C100, unit: '%', more: true }),
     d('res', 'Resonance', 0, 100, 20, 9, PCT, { dsp: C100, unit: '%', more: true })] },
+  // nc-fx's own (2026-11-23, NYX's break tools): Crunch, an old sampler's converter (src/units.js unitCrunch). Rate
+  // and Bits at the top (44.1 kHz, 16-bit) play the input exactly. Starts SP-1200-ish: 26 kHz, 12-bit.
+  { type: 'crunch', label: 'Crunch', own: true, note: 'Rate with no filter, then Bits: the S950 / SP-1200 grit.', dials: [
+    d('rate', 'Rate', 0, 100, 78, 1, { fmt: 'khz', law: L.crunchRate }, { step: 0.1, dsp: { law: L.crunchRate } }),
+    d('bits', 'Bits', 4, 16, 12, 2, { fmt: 'num', suffix: '-bit' }, { unit: 'bits' }),
+    d('hold', 'Steps', 0, 1, 0, 3, { fmt: 'option' }, { step: null, options: opts([[0, 'Hard'], [1, 'Smooth']]), more: true })] },
   // ASTRID's own (hacks-astrid/mod.js).
   { type: 'flanger', label: 'Flanger', dials: [
     d('rate', 'Rate', 0, 100, 26, 1, { fmt: 'rate', law: L.rate }, { dsp: { law: L.rate } }),
@@ -156,8 +163,8 @@ export var CATALOG = [
 ];
 /** Every type that loads (older files included), in catalog order. */
 export var CATALOG_TYPES = CATALOG.map(function (e) { return e.type; });
-/** What "Add" offers: everything not hidden, in ASTRID's order with Hall, Ensemble and Gate after Reverb (Delay,
- * Reverb, Hall, Ensemble, Gate, Flanger, Chorus, Phaser, EQ, Drive, Compressor, Width). */
+/** What "Add" offers: everything not hidden, in ASTRID's order with Hall, Ensemble, Gate and Crunch after Reverb (Delay,
+ * Reverb, Hall, Ensemble, Gate, Crunch, Flanger, Chorus, Phaser, EQ, Drive, Compressor, Width). */
 export var CATALOG_MENU = CATALOG.filter(function (e) { return !e.hidden; }).map(function (e) { return e.type; });
 
 var ALIAS = { reverb: 'plate' };
@@ -237,6 +244,7 @@ export function formatDial(dial, v, bpm) {
       h = lawValue(f.law, v);
       if (h === null) return f.zero || 'open';
       return f.astrid ? fmtHz(h) : h + ' Hz';
+    case 'khz': return (lawValue(f.law, v) / 1000).toFixed(1) + ' kHz';
     case 'q': return 'Q ' + lawValue(f.law, v).toFixed(1);
     case 'ratio': return lawValue(f.law, v).toFixed(1) + ':1';
     case 'rate': h = lawValue(f.law, v); return (h < 1 ? h.toFixed(2) : h < 10 ? h.toFixed(1) : h.toFixed(0)) + ' Hz';

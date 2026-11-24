@@ -99,10 +99,10 @@ var L_PRE = 0, L_IN = 1, L_AP1 = 5, L_D1 = 7, L_AP2 = 9, L_D2 = 11, N_LINES = 13
 var PLATE_IG = [0.75, 0.75, 0.625, 0.625];
 
 /** Unit type codes (the engine's numbers for the catalog's types). */
-var UNIT = { drive: 0, delay: 1, plate: 2, eq: 3, compressor: 4, width: 5, flanger: 6, chorus: 7, phaser: 8, lowpass: 9, highpass: 10, bandpass: 11, hall: 12, ensemble: 13, gate: 14 };
-var UNIT_TYPES = ['drive', 'delay', 'plate', 'eq', 'compressor', 'width', 'flanger', 'chorus', 'phaser', 'lowpass', 'highpass', 'bandpass', 'hall', 'ensemble', 'gate'];
+var UNIT = { drive: 0, delay: 1, plate: 2, eq: 3, compressor: 4, width: 5, flanger: 6, chorus: 7, phaser: 8, lowpass: 9, highpass: 10, bandpass: 11, hall: 12, ensemble: 13, gate: 14, crunch: 15 };
+var UNIT_TYPES = ['drive', 'delay', 'plate', 'eq', 'compressor', 'width', 'flanger', 'chorus', 'phaser', 'lowpass', 'highpass', 'bandpass', 'hall', 'ensemble', 'gate', 'crunch'];
 /** Params per unit (k = 0 is the on flag). */
-var UNIT_NPARAMS = [8, 10, 6, 6, 6, 3, 5, 5, 6, 2, 3, 4, 9, 7, 16];
+var UNIT_NPARAMS = [8, 10, 6, 6, 6, 3, 5, 5, 6, 2, 3, 4, 9, 7, 16, 4];
 
 /** ctl() ops. Results are small integers (1 = true), never doubles. */
 var OP_NONE = 0, OP_CLEAR = 1, OP_FADE_BEGIN = 2, OP_FADE_WORK = 3, OP_FADE_DONE = 4, OP_FADE_IDLE = 5,
@@ -1813,6 +1813,125 @@ function unitGate(E) {
   return unitBase(14, step, set, clear, [A, LV, SH], settleAll);
 }
 
+// ---------------------------------------------------------------------------------------------------------------
+// Crunch (nc-fx's own, 2026-11-23, for NYX's break tools; Peter: "much better - build it"): an old sampler's
+// converter. A phase-accumulator sample-and-hold at Rate with no anti-alias filter (the S950 / SP-1200 grit: what is
+// above half the rate folds back down), optionally a first-order hold (Steps: Smooth, a straight line from the last
+// held value to the newest, one converter period late), then a mid-tread quantiser to Bits (no dither), then a 5 Hz
+// one-pole DC blocker (a coarse quantiser leaves an offset). k: 0 on, 1 rate Hz (44100 and up: no rate reduction),
+// 2 bits 4-16 (16: no quantising), 3 steps (0 hard, 1 smooth).
+// Click safety: a Bits move crossfades the old depth into the new over 5 ms (no zipper step); a Rate move only
+// changes the phase increment (the held value carries on); going from clean (44.1 kHz, 16-bit) to crunched or back
+// crossfades the dry signal and the crunched one over 5 ms. Clean (both at the top) is the input exactly: no state,
+// no rounding.
+var CRUNCH_FADE_S = 0.005;
+var CRUNCH_DC_HZ = 5;
+function unitCrunch(E) {
+  var sr = E.sr, IO = E.IO, D = new Float64Array(2);
+  // A: 0 on, 1 onT, 2 slept, 3 inc (rate / sr; 1 = every sample), 4 phase, 5-6 held L R, 7-8 previous held L R,
+  // 9 smooth (1) or hard (0), 10 levels now (2^(bits-1); 0 = 16-bit, none), 11 levels before a Bits move, 12 the Bits
+  // crossfade 0..1 (1 = done), 13 its step, 14-15 DC x1 L R, 16-17 DC y1 L R, 18 DC coef, 19 active (0 clean .. 1),
+  // 20 active target, 21 the active ramp's step
+  var A = new Float64Array(22);
+  function init() {
+    A.fill(0); A[3] = 1; A[12] = 1; A[13] = 1 / (CRUNCH_FADE_S * sr); A[18] = 1 - TWOPI * CRUNCH_DC_HZ / sr; A[21] = A[13];
+  }
+  init();
+  function clear() { A[4] = 0; A[5] = 0; A[6] = 0; A[7] = 0; A[8] = 0; A[14] = 0; A[15] = 0; A[16] = 0; A[17] = 0; A[12] = 1; A[11] = A[10]; A[19] = A[20]; }
+  function target() { A[20] = A[3] < 1 || A[10] > 0 ? 1 : 0; }
+  function set(k, snap) {
+    var x, q;
+    if (k === 0) { x = E.V[0] ? 1 : 0; E.V[0] = x; if (x && A[2] === 1) { clear(); A[2] = 0; } A[1] = x; if (snap) A[0] = x; return true; }
+    if (k === 1) {
+      if (!(E.V[1] = 1000, E.V[2] = 192000, take(E))) return false;
+      x = E.V[0];
+      A[3] = x >= 44100 || x >= sr ? 1 : x / sr;
+      target();
+      if (snap) A[19] = A[20];
+      return true;
+    }
+    if (k === 2) {
+      if (!(E.V[1] = 4, E.V[2] = 16, take(E))) return false;
+      x = Math.round(E.V[0]); E.V[0] = x;
+      q = x >= 16 ? 0 : Math.pow(2, x - 1);
+      if (q !== A[10]) {
+        if (snap) { A[11] = q; A[12] = 1; }
+        else { A[11] = A[12] < 1 ? A[11] : A[10]; A[12] = 0; }
+        A[10] = q;
+      }
+      target();
+      if (snap) A[19] = A[20];
+      return true;
+    }
+    if (k === 3) {
+      if (!(E.V[1] = 0, E.V[2] = 1, take(E))) return false;
+      x = E.V[0] >= 0.5 ? 1 : 0; E.V[0] = x; A[9] = x;
+      return true;
+    }
+    return false;
+  }
+  function settleAll() { settle(A, 0); }
+  function step() {
+    if (!begin(E, A, D)) return;
+    var xL = D[0], xR = D[1];
+    var a = A[19];
+    if (a !== A[20]) {
+      a = A[20] > a ? a + A[21] : a - A[21];
+      if (a >= 1) a = 1;
+      if (a <= 0) a = 0;
+      if ((A[20] === 1 && a === 1) || (A[20] === 0 && a === 0)) a = A[20];
+      A[19] = a;
+    }
+    if (a === 0) {
+      // Clean: the input as it is. The converter waits empty, so crunching again starts fresh.
+      A[4] = 0; A[5] = xL; A[6] = xR; A[7] = xL; A[8] = xR; A[14] = 0; A[15] = 0; A[16] = 0; A[17] = 0;
+      IO[0] = xL; IO[1] = xR;
+      finish(IO, D, A);
+      return;
+    }
+    var sL, sR, ph;
+    if (A[3] >= 1) { sL = xL; sR = xR; A[5] = xL; A[6] = xR; A[7] = xL; A[8] = xR; A[4] = 0; }
+    else {
+      ph = A[4] + A[3];
+      if (ph >= 1) { ph -= 1; A[7] = A[5]; A[8] = A[6]; A[5] = xL; A[6] = xR; }
+      A[4] = ph;
+      if (A[9] === 1) { sL = A[7] + (A[5] - A[7]) * ph; sR = A[8] + (A[6] - A[8]) * ph; }
+      else { sL = A[5]; sR = A[6]; }
+    }
+    // Quantise (mid-tread, no dither): round(s * q) / q, kept inside [-1, 1 - 1/q]; q = 0 is 16-bit (as it is).
+    var q = A[10], yL = sL, yR = sR, top;
+    if (q > 0) {
+      top = 1 - 1 / q;
+      yL = Math.round(sL * q) / q; if (yL > top) yL = top; else if (yL < -1) yL = -1;
+      yR = Math.round(sR * q) / q; if (yR > top) yR = top; else if (yR < -1) yR = -1;
+    }
+    if (A[12] < 1) {
+      // A Bits move: the old depth fades into the new over CRUNCH_FADE_S.
+      var o = A[11], oL = sL, oR = sR, f = A[12];
+      if (o > 0) {
+        top = 1 - 1 / o;
+        oL = Math.round(sL * o) / o; if (oL > top) oL = top; else if (oL < -1) oL = -1;
+        oR = Math.round(sR * o) / o; if (oR > top) oR = top; else if (oR < -1) oR = -1;
+      }
+      yL = oL + (yL - oL) * f;
+      yR = oR + (yR - oR) * f;
+      f += A[13];
+      A[12] = f >= 1 ? 1 : f;
+    }
+    // DC blocker: y = x - x1 + r * y1.
+    var r = A[18];
+    var dL = yL - A[14] + r * A[16], dR = yR - A[15] + r * A[17];
+    A[14] = yL; A[15] = yR;
+    if (dL > -LP_FLUSH && dL < LP_FLUSH) dL = 0;
+    if (dR > -LP_FLUSH && dR < LP_FLUSH) dR = 0;
+    A[16] = dL; A[17] = dR;
+    IO[0] = a === 1 ? dL : xL + (dL - xL) * a;
+    IO[1] = a === 1 ? dR : xR + (dR - xR) * a;
+    finish(IO, D, A);
+  }
+  return unitBase(15, step, set, clear, [A], settleAll);
+}
+
 /** A new unit of type code t (UNIT) on env E. Allocates: call on the control path only. */
 function createUnit(E, t) {
   switch (t) {
@@ -1831,6 +1950,7 @@ function createUnit(E, t) {
     case 12: return unitHall(E);
     case 13: return unitEnsemble(E);
     case 14: return unitGate(E);
+    case 15: return unitCrunch(E);
   }
   return null;
 }
@@ -2226,8 +2346,8 @@ function createFxDsp(sampleRate, opts) {
 //     it reads the clock once every 4096 loop turns, so a plugin's ordinary loops cost a decrement each.
 // Every buffer is made when the unit is made (on the control path); run() allocates nothing.
 
-/** Plugin unit type codes start here (after the 15 built-in units, UNIT_TYPES). */
-var PLUGIN_BASE = 15;
+/** Plugin unit type codes start here (after the 16 built-in units, UNIT_TYPES). */
+var PLUGIN_BASE = 16;
 /** The most frames a plugin's process() is given at once. */
 var PLUGIN_BLOCK = 128;
 /** Params a plugin may have (the chain's 16 per box, less the on flag). */
@@ -2437,7 +2557,7 @@ var EV_BEAT = -3;     // the beat clock's line-up (Gate): beat v at the event's 
 var EV_FREE = -4;     // the beat clock runs free from the event's frame (the transport stopped)
 var EV_BAR = -5;      // beats per bar (1/8T restarts each bar)
 var MAXK = 16;        // params per box in the event index (b * MAXK + k)
-var NTYPES = 15;
+var NTYPES = 16;
 var MAX_SLOTS = 8;
 
 /**

@@ -50,7 +50,7 @@ const ALT = { levels: Array.from({ length: 16 }, (_, i) => (i % 2 ? 0 : 100)), s
 const alt = (dials = {}) => slotOf('Stutter', { smooth: 1, ...dials }, ALT);
 
 test('catalog: Gate after Ensemble in Add, nc-fx\'s own, its dials; ASTRID never gets it', () => {
-  assert.deepEqual(CATALOG_MENU.slice(0, 6), ['delay', 'plate', 'hall', 'ensemble', 'gate', 'flanger']);
+  assert.deepEqual(CATALOG_MENU.slice(0, 7), ['delay', 'plate', 'hall', 'ensemble', 'gate', 'crunch', 'flanger']);
   const e = catalogEntry('gate');
   assert.equal(e.own, true); assert.equal(e.pattern, true); assert.equal(e.label, 'Gate');
   assert.deepEqual(e.dials.filter((d) => !d.more).map((d) => d.key), ['rate', 'swing', 'depth', 'mix']);

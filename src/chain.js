@@ -30,7 +30,7 @@ var EV_BEAT = -3;     // the beat clock's line-up (Gate): beat v at the event's 
 var EV_FREE = -4;     // the beat clock runs free from the event's frame (the transport stopped)
 var EV_BAR = -5;      // beats per bar (1/8T restarts each bar)
 var MAXK = 16;        // params per box in the event index (b * MAXK + k)
-var NTYPES = 15;
+var NTYPES = 16;
 var MAX_SLOTS = 8;
 
 /**

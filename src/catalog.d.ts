@@ -1,10 +1,10 @@
 /** A catalog type: every effect nc-fx has (ASTRID's Hacks). */
-export type FxType = 'lowpass' | 'highpass' | 'bandpass' | 'delay' | 'plate' | 'flanger' | 'chorus' | 'phaser' | 'eq' | 'drive' | 'compressor' | 'width' | 'hall' | 'ensemble' | 'gate';
+export type FxType = 'lowpass' | 'highpass' | 'bandpass' | 'delay' | 'plate' | 'flanger' | 'chorus' | 'phaser' | 'eq' | 'drive' | 'compressor' | 'width' | 'hall' | 'ensemble' | 'gate' | 'crunch';
 /** A dial law (hacks.ts): pow a * b^(v / div), or exp2 a * 2^(m * v / div); then Math.round or toFixed. */
 export interface FxLaw { pow?: [number, number]; exp2?: [number, number]; div: number; round?: true; fixed?: number; zeroNull?: true }
 /** How a dial is read out (see formatDial and src/catalog.js for each fmt). */
 export interface FxFormat {
-  fmt: 'db' | 'pct' | 'wet' | 'signedPct' | 'num' | 'fixed' | 'hz' | 'q' | 'ratio' | 'rate' | 'balance' | 'option' | 'stages' | 'tempoMs' | 'freeBeats';
+  fmt: 'db' | 'pct' | 'wet' | 'signedPct' | 'num' | 'fixed' | 'hz' | 'khz' | 'q' | 'ratio' | 'rate' | 'balance' | 'option' | 'stages' | 'tempoMs' | 'freeBeats';
   zero?: string; suffix?: string; law?: FxLaw; astrid?: true; offAt?: number; add?: number; div?: number; digits?: number;
 }
 export interface FxCatalogDial {

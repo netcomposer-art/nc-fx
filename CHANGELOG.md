@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+**Crunch** (2026-11-23, for NYX's break tools: Peter approved the clips, "much better - build it"): an old sampler's
+converter, nc-fx's own, in Add right after Gate (Delay, Reverb, Hall, Ensemble, Gate, Crunch, Flanger, ...). Unit
+code 15; plugin unit codes now start at 16 (`PLUGIN_BASE`; run-time only, never saved).
+
+- **Dials:** Rate (0–100 on a log law, 4 kHz … 44.1 kHz; 78 is 26 kHz) and Bits (4–16); under More: Steps (Hard,
+  Smooth). A new Crunch starts at 26 kHz, 12-bit (SP-1200-ish).
+- **DSP:** a phase-accumulator sample-and-hold at Rate with no anti-alias filter (a 1 kHz sine at 6 kHz folds to 5 kHz,
+  14 dB down), Smooth a first-order hold (one converter period late), then a mid-tread quantiser (round, no dither:
+  6 dB a bit), then a 5 Hz one-pole DC blocker (under −100 dBFS of offset at 6 kHz / 4-bit).
+- **Clean at the top:** 44.1 kHz (at any context rate) and 16-bit play the input exactly, sample for sample.
+- **No clicks from the dials:** a Bits move crossfades the old depth into the new over 5 ms; a Rate move only changes
+  the phase increment (the held value carries on); clean to crunched and back crossfades over 5 ms. On/off is the
+  usual bypass.
+- 0 B allocation, no denormal creep; CPU in the table below. A new readout format, `khz` ("26.0 kHz").
+
 **Gate** (Peter's go on the mockups, 2026-11-06): a tempo-synced step volume / filter shaper, nc-fx's own, in Add
 right after Ensemble (Delay, Reverb, Hall, Ensemble, Gate, Flanger, ...). Unit code 14; plugin unit codes now start
 at 15 (`PLUGIN_BASE`; run-time only, never saved).
