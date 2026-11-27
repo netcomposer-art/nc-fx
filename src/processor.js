@@ -129,7 +129,7 @@ class NcFxProcessor extends AudioWorkletProcessor {
       if (this.mN >= this.mEvery) {
         this.mN = 0;
         var n = this.dsp.takeMeter(this.mBuf), loud = false;
-        for (var j = 0; j < n; j++) if ((j < 2 || (j > 2 && (j - 3) % 3 !== 0)) && this.mBuf[j] > 1e-5) { loud = true; break; }
+        for (var j = 0; j < n; j++) if ((j < 2 || (j > 2 && (j - 3) % 4 !== 0)) && this.mBuf[j] > 1e-5) { loud = true; break; }
         if (loud || !this.mQuiet) this.port.postMessage(this.mMsg);
         this.mQuiet = !loud;
       }

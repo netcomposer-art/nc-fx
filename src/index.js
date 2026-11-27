@@ -171,16 +171,17 @@ function createHost(ctx, o, start, fold) {
   /** The latest peaks, or null when there are none or they are old (a suspended context sends nothing). */
   H.levels = function () { return H.lv && nowMs() - H.lvAt < METER_STALE_MS ? H.lv : null; };
   var handles = {};
-  /** One handle per ref: open() / close() (ref-counted), read() the peaks { in, out } (one reused object). */
+  /** One handle per ref: open() / close() (ref-counted), read() the peaks { in, out, gr } (one reused object; gr: the
+   * most gain reduction a compressor took off since the last read, in dB, 0 or more; 0 for any other effect). */
   H.meter = function (key, pick) {
     if (handles[key]) return handles[key];
-    var open = 0, lv = { in: 0, out: 0 };
+    var open = 0, lv = { in: 0, out: 0, gr: 0 };
     var h = {
       open: function () { if (!H.meterOpen()) return false; open++; return true; },
       close: function () { if (open === 0) return; open--; H.meterClose(); },
       read: function () {
         var d = open > 0 ? H.levels() : null;
-        lv.in = 0; lv.out = 0;
+        lv.in = 0; lv.out = 0; lv.gr = 0;
         if (d) pick(d, lv);
         return lv;
       }
@@ -435,7 +436,7 @@ function createSlotCore(ctx, o) {
     return H.meter('#' + ref, function (d, lv) {
       var slot = find(ref), uid = slot ? uids[slot.id] : 0, n = d[2];
       if (!uid) return;
-      for (var at = 3, m = 0; m < n; m++, at += 3) if (d[at] === uid) { lv.in = d[at + 1]; lv.out = d[at + 2]; return; }
+      for (var at = 3, m = 0; m < n; m++, at += 4) if (d[at] === uid) { lv.in = d[at + 1]; lv.out = d[at + 2]; lv.gr = d[at + 3]; return; }
     });
   };
   /** Set one dial (UI units) or 'bypass' of the effect `ref` (an id, or a type for its first instance). */
