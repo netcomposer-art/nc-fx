@@ -194,3 +194,15 @@ test('a compressor reports its gain reduction (dB) since the last take; bypassed
   d.takeMeter(out);
   assert.equal(out[6], 0, 'bypassed: no gain reduction');
 });
+
+test('worklet: a meter opened before the node existed (pending) turns the taps on, with the compressor\'s GR', () => {
+  const w = processor({ slots: 3, chain: [{ uid: 5, type: 'compressor', program: [[0, 1], [1, -30], [2, 4]] }], order: [5],
+    pending: [{ t: 'meter', on: true }] });
+  const loud = sine(128, 0.5);
+  for (let i = 0; i < 60; i++) w.block(loud);
+  assert.ok(w.posted.length > 0, 'reports, with no live meter message');
+  const last = w.posted.at(-1);
+  assert.equal(last.d[3], 5);
+  assert.ok(last.d[4] > 0.4, `in ${last.d[4]}`);
+  assert.ok(last.d[6] > 5, `gain reduction ${last.d[6]} dB`);
+});

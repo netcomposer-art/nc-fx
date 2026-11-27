@@ -45,6 +45,8 @@ class NcFxProcessor extends AudioWorkletProcessor {
       for (var k = 0; k < pend.length; k++) {
         var m = pend[k];
         if (!m || typeof m !== 'object') continue;
+        // A meter opened before the node existed (a card drawn before the sound starts): taps on, as a live message.
+        if (m.t === 'meter') { this.onMessage(m); continue; }
         var f = typeof m.when === 'number' && m.when > 0 ? Math.round(m.when * sampleRate) : 0;
         if (f <= currentFrame) this.dispatch(m, 0, true);
         else this.dispatch(m, f, !!m.snap);
