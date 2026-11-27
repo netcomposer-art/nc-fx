@@ -909,6 +909,8 @@ function unitCompressor(E) {
   var sr = E.sr, IO = E.IO, D = new Float64Array(2);
   // 0 on, 1 onT, 2 slept, 3 yl, 4 gr, 5 thrS, 6 thrT, 7 ratioS, 8 ratioT, 9 mkS, 10 mkT, 11 att, 12 rel, 13 aA, 14 aR
   var A = new Float64Array(15);
+  // The most gain reduction (dB, 0 or more) since the chain's last takeMeter() read and cleared it (the level gauge).
+  var G = new Float64Array(1);
   function init() { A.fill(0); A[7] = 1; A[8] = 1; A[11] = 10; A[12] = 150; A[13] = fxCoef(0.010, sr); A[14] = fxCoef(0.150, sr); }
   init();
   function clear() { A[3] = 0; A[4] = 0; }
@@ -950,11 +952,14 @@ function unitCompressor(E) {
     if (yl < 1e-9) yl = 0;
     A[3] = yl;
     A[4] = yl;
+    if (A[1] === 1 && yl > G[0]) G[0] = yl; // switched off it still listens (to fade back in), but takes nothing off
     var g = Math.exp((A[9] - yl) * 0.11512925464970229);
     IO[0] = xL * g; IO[1] = xR * g;
     finish(IO, D, A);
   }
-  return unitBase(4, step, set, clear, [A], settleAll);
+  var u = unitBase(4, step, set, clear, [A], settleAll);
+  u.gr = G;
+  return u;
 }
 
 // Width (ncWidth*): mid/side. M = (L+R)/2, S = (L-R)/2, S times width. A mono source has no side, so width cannot
@@ -2559,6 +2564,7 @@ var EV_BAR = -5;      // beats per bar (1/8T restarts each bar)
 var MAXK = 16;        // params per box in the event index (b * MAXK + k)
 var NTYPES = 16;
 var MAX_SLOTS = 8;
+var METER_STRIDE = 4; // takeMeter(): uid, input, output, gain reduction per effect
 
 /**
  * @param {number} sampleRate
@@ -2873,21 +2879,27 @@ function createFxChainDsp(sampleRate, opts) {
     peak: peak,
     takeGainReduction: function () { var lo = lim.LM[2]; lim.LM[2] = 1; return lo; },
     /** Level taps on (true) or off. Off costs nothing per sample. */
-    meter: function (on) { MT[0] = on ? 1 : 0; MIN.fill(0); MOUT.fill(0); MC[0] = 0; MC[1] = 0; },
+    meter: function (on) { MT[0] = on ? 1 : 0; MIN.fill(0); MOUT.fill(0); MC[0] = 0; MC[1] = 0; for (var b = 0; b < NB; b++) if (CUR[b].gr) CUR[b].gr[0] = 0; },
     /**
      * The peaks since the last call (sample peak, the louder of L and R; 1 = full scale), into `out`, then reset:
-     * out[0] the chain's input, out[1] its output, out[2] n, then per effect playing (first to last) its uid, input
-     * and output. Returns the floats written (3 + 3n). `out` needs 3 + 3 * (2 * slots + 2) floats. Allocates nothing.
+     * out[0] the chain's input, out[1] its output, out[2] n, then per effect playing (first to last) its uid, input,
+     * output and gain reduction (dB, 0 or more: the most a compressor took off; 0 for every other effect). Returns
+     * the floats written (3 + 4n). `out` needs 3 + 4 * (2 * slots + 2) floats. Allocates nothing.
      */
     takeMeter: function (out) {
       var n = ON[0], at = 3;
       out[0] = MC[0]; out[1] = MC[1]; out[2] = n;
-      for (var m = 0; m < n; m++) { var b = ORD[m]; out[at] = UID[b]; out[at + 1] = MIN[b]; out[at + 2] = MOUT[b]; at += 3; }
+      for (var m = 0; m < n; m++) {
+        var b = ORD[m], g = CUR[b].gr;
+        out[at] = UID[b]; out[at + 1] = MIN[b]; out[at + 2] = MOUT[b]; out[at + 3] = g ? g[0] : 0;
+        if (g) g[0] = 0;
+        at += METER_STRIDE;
+      }
       MIN.fill(0); MOUT.fill(0); MC[0] = 0; MC[1] = 0;
       return at;
     },
     /** Floats takeMeter() may write. */
-    meterSize: 3 + 3 * NB,
+    meterSize: 3 + METER_STRIDE * NB,
     /** Plugin failures not yet taken (a host checks errorsPending[0] after each process()). */
     errorsPending: ERRN,
     /** Each newly failed plugin box as uid, code pairs into `out` (Int32Array of 2 * (2 * slots + 2)); the count. */
@@ -3040,6 +3052,8 @@ class NcFxProcessor extends AudioWorkletProcessor {
       for (var k = 0; k < pend.length; k++) {
         var m = pend[k];
         if (!m || typeof m !== 'object') continue;
+        // A meter opened before the node existed (a card drawn before the sound starts): taps on, as a live message.
+        if (m.t === 'meter') { this.onMessage(m); continue; }
         var f = typeof m.when === 'number' && m.when > 0 ? Math.round(m.when * sampleRate) : 0;
         if (f <= currentFrame) this.dispatch(m, 0, true);
         else this.dispatch(m, f, !!m.snap);
@@ -3124,7 +3138,7 @@ class NcFxProcessor extends AudioWorkletProcessor {
       if (this.mN >= this.mEvery) {
         this.mN = 0;
         var n = this.dsp.takeMeter(this.mBuf), loud = false;
-        for (var j = 0; j < n; j++) if ((j < 2 || (j > 2 && (j - 3) % 3 !== 0)) && this.mBuf[j] > 1e-5) { loud = true; break; }
+        for (var j = 0; j < n; j++) if ((j < 2 || (j > 2 && (j - 3) % 4 !== 0)) && this.mBuf[j] > 1e-5) { loud = true; break; }
         if (loud || !this.mQuiet) this.port.postMessage(this.mMsg);
         this.mQuiet = !loud;
       }

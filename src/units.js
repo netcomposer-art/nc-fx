@@ -857,6 +857,8 @@ export function unitCompressor(E) {
   var sr = E.sr, IO = E.IO, D = new Float64Array(2);
   // 0 on, 1 onT, 2 slept, 3 yl, 4 gr, 5 thrS, 6 thrT, 7 ratioS, 8 ratioT, 9 mkS, 10 mkT, 11 att, 12 rel, 13 aA, 14 aR
   var A = new Float64Array(15);
+  // The most gain reduction (dB, 0 or more) since the chain's last takeMeter() read and cleared it (the level gauge).
+  var G = new Float64Array(1);
   function init() { A.fill(0); A[7] = 1; A[8] = 1; A[11] = 10; A[12] = 150; A[13] = fxCoef(0.010, sr); A[14] = fxCoef(0.150, sr); }
   init();
   function clear() { A[3] = 0; A[4] = 0; }
@@ -898,11 +900,14 @@ export function unitCompressor(E) {
     if (yl < 1e-9) yl = 0;
     A[3] = yl;
     A[4] = yl;
+    if (A[1] === 1 && yl > G[0]) G[0] = yl; // switched off it still listens (to fade back in), but takes nothing off
     var g = Math.exp((A[9] - yl) * 0.11512925464970229);
     IO[0] = xL * g; IO[1] = xR * g;
     finish(IO, D, A);
   }
-  return unitBase(4, step, set, clear, [A], settleAll);
+  var u = unitBase(4, step, set, clear, [A], settleAll);
+  u.gr = G;
+  return u;
 }
 
 // Width (ncWidth*): mid/side. M = (L+R)/2, S = (L-R)/2, S times width. A mono source has no side, so width cannot

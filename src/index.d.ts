@@ -95,7 +95,12 @@ export interface FxCore {
   dispose(): void;
 }
 /** Sample peaks since the worklet's last report (about 30 a second): the louder of L and R, 1 = full scale. */
-export interface FxLevels { in: number; out: number }
+export interface FxLevels {
+  in: number;
+  out: number;
+  /** The most gain reduction a compressor took off since the last report, in dB (0 or more); 0 for other effects. */
+  gr: number;
+}
 /**
  * A level tap (fxMeter). open() while it is on screen (false: the chain can't meter, e.g. disposed), close() after;
  * opens are counted over every meter of the chain, and the worklet measures nothing while none is open. read()

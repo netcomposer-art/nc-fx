@@ -32,6 +32,7 @@ var EV_BAR = -5;      // beats per bar (1/8T restarts each bar)
 var MAXK = 16;        // params per box in the event index (b * MAXK + k)
 var NTYPES = 16;
 var MAX_SLOTS = 8;
+var METER_STRIDE = 4; // takeMeter(): uid, input, output, gain reduction per effect
 
 /**
  * @param {number} sampleRate
@@ -346,21 +347,27 @@ export function createFxChainDsp(sampleRate, opts) {
     peak: peak,
     takeGainReduction: function () { var lo = lim.LM[2]; lim.LM[2] = 1; return lo; },
     /** Level taps on (true) or off. Off costs nothing per sample. */
-    meter: function (on) { MT[0] = on ? 1 : 0; MIN.fill(0); MOUT.fill(0); MC[0] = 0; MC[1] = 0; },
+    meter: function (on) { MT[0] = on ? 1 : 0; MIN.fill(0); MOUT.fill(0); MC[0] = 0; MC[1] = 0; for (var b = 0; b < NB; b++) if (CUR[b].gr) CUR[b].gr[0] = 0; },
     /**
      * The peaks since the last call (sample peak, the louder of L and R; 1 = full scale), into `out`, then reset:
-     * out[0] the chain's input, out[1] its output, out[2] n, then per effect playing (first to last) its uid, input
-     * and output. Returns the floats written (3 + 3n). `out` needs 3 + 3 * (2 * slots + 2) floats. Allocates nothing.
+     * out[0] the chain's input, out[1] its output, out[2] n, then per effect playing (first to last) its uid, input,
+     * output and gain reduction (dB, 0 or more: the most a compressor took off; 0 for every other effect). Returns
+     * the floats written (3 + 4n). `out` needs 3 + 4 * (2 * slots + 2) floats. Allocates nothing.
      */
     takeMeter: function (out) {
       var n = ON[0], at = 3;
       out[0] = MC[0]; out[1] = MC[1]; out[2] = n;
-      for (var m = 0; m < n; m++) { var b = ORD[m]; out[at] = UID[b]; out[at + 1] = MIN[b]; out[at + 2] = MOUT[b]; at += 3; }
+      for (var m = 0; m < n; m++) {
+        var b = ORD[m], g = CUR[b].gr;
+        out[at] = UID[b]; out[at + 1] = MIN[b]; out[at + 2] = MOUT[b]; out[at + 3] = g ? g[0] : 0;
+        if (g) g[0] = 0;
+        at += METER_STRIDE;
+      }
       MIN.fill(0); MOUT.fill(0); MC[0] = 0; MC[1] = 0;
       return at;
     },
     /** Floats takeMeter() may write. */
-    meterSize: 3 + 3 * NB,
+    meterSize: 3 + METER_STRIDE * NB,
     /** Plugin failures not yet taken (a host checks errorsPending[0] after each process()). */
     errorsPending: ERRN,
     /** Each newly failed plugin box as uid, code pairs into `out` (Int32Array of 2 * (2 * slots + 2)); the count. */

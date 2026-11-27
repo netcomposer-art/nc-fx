@@ -46,15 +46,16 @@ test('slot chain: per effect input and output peaks, in order; off, the same sam
   for (let i = 0; i < a.length; i++) assert.ok(identical(a[i], b[i]), 'metering changes no sample');
   const out = new Float32Array(metered.meterSize);
   const n = metered.takeMeter(out);
-  assert.equal(n, 3 + 3 * 2);
+  assert.equal(n, 3 + 4 * 2);
   assert.equal(out[2], 2);
   assert.ok(Math.abs(out[0] - 0.25) < 0.01, `chain in ${out[0]}`);
   assert.equal(out[3], 1);
   assert.ok(Math.abs(out[4] - 0.25) < 0.01, `drive in ${out[4]}`);
   assert.ok(out[5] > out[4] * 1.5, `drive out ${out[5]} louder than its input`);
-  assert.equal(out[6], 2);
-  assert.ok(Math.abs(out[7] - out[5]) < 1e-6, 'the width sees what the drive put out');
-  assert.ok(out[8] > 0, 'a bypassed effect still reports (its input passes)');
+  assert.equal(out[6], 0, 'a drive reports no gain reduction');
+  assert.equal(out[7], 2);
+  assert.ok(Math.abs(out[8] - out[5]) < 1e-6, 'the width sees what the drive put out');
+  assert.ok(out[9] > 0, 'a bypassed effect still reports (its input passes)');
   assert.ok(out[1] > 0, 'chain out');
   // Reset on take; off measures nothing.
   metered.takeMeter(out);
@@ -123,28 +124,28 @@ test('host: fxMeter handles are cached per ref, opens are counted over the chain
   assert.equal(fxMeter({}), null);
   const a = fxMeter(fx, 'drive-1'), b = fxMeter(fx, 'eq-1');
   assert.equal(fxMeter(fx, 'drive-1'), a, 'one handle per ref');
-  assert.deepEqual(a.read(), { in: 0, out: 0 });
+  assert.deepEqual(a.read(), { in: 0, out: 0, gr: 0 });
   // Before the worklet: the open is queued and reaches it in processorOptions.pending.
   assert.equal(a.open(), true);
   await fx.ready;
   assert.ok(ctx.node.options.processorOptions.pending.some((m) => m.t === 'meter' && m.on === true));
   assert.equal(b.open(), true);
   assert.equal(ctx.posted.filter((m) => m.t === 'meter').length, 0, 'the second open sends nothing');
-  const d = new Float32Array([0.5, 0.6, 2, 1, 0.5, 0.9, 2, 0.9, 0.7]);
+  const d = new Float32Array([0.5, 0.6, 2, 1, 0.5, 0.9, 0, 2, 0.9, 0.7, 3.5]);
   ctx.node.port.onmessage({ data: { t: 'lv', d } });
-  assert.deepEqual({ ...a.read() }, { in: 0.5, out: Math.fround(0.9) });
-  assert.deepEqual({ ...b.read() }, { in: Math.fround(0.9), out: Math.fround(0.7) });
-  assert.deepEqual({ ...fxMeter(fx).read() }, { in: 0, out: 0 }, 'a closed handle reads zeros');
+  assert.deepEqual({ ...a.read() }, { in: 0.5, out: Math.fround(0.9), gr: 0 });
+  assert.deepEqual({ ...b.read() }, { in: Math.fround(0.9), out: Math.fround(0.7), gr: 3.5 });
+  assert.deepEqual({ ...fxMeter(fx).read() }, { in: 0, out: 0, gr: 0 }, 'a closed handle reads zeros');
   // A move keeps the effect's own peaks (by uid, not position).
   fx.moveEffect('eq-1', 0);
-  ctx.node.port.onmessage({ data: { t: 'lv', d: new Float32Array([0.5, 0.6, 2, 2, 0.1, 0.2, 1, 0.3, 0.4]) } });
-  assert.deepEqual({ ...b.read() }, { in: Math.fround(0.1), out: Math.fround(0.2) });
+  ctx.node.port.onmessage({ data: { t: 'lv', d: new Float32Array([0.5, 0.6, 2, 2, 0.1, 0.2, 0, 1, 0.3, 0.4, 0]) } });
+  assert.deepEqual({ ...b.read() }, { in: Math.fround(0.1), out: Math.fround(0.2), gr: 0 });
   a.close();
   assert.equal(ctx.posted.filter((m) => m.t === 'meter').length, 0);
   b.close();
   b.close(); // extra closes are ignored
   assert.deepEqual(ctx.posted.filter((m) => m.t === 'meter'), [{ t: 'meter', on: false }]);
-  assert.deepEqual({ ...b.read() }, { in: 0, out: 0 });
+  assert.deepEqual({ ...b.read() }, { in: 0, out: 0, gr: 0 });
   fx.dispose();
   assert.equal(a.open(), false, 'a disposed chain does not meter');
 });
@@ -165,4 +166,43 @@ test('host: old peaks read as silence (a suspended context sends nothing)', asyn
     assert.equal(m.read().in, 0);
   } finally { performance.now = real; }
   m.close();
+});
+
+test('a compressor reports its gain reduction (dB) since the last take; bypassed, none', () => {
+  const d = createFxChainDsp(SR, { slots: 3 });
+  const st = sanitizeSlots({ v: 2, chain: [
+    { id: 'compressor-1', type: 'compressor', bypass: false, dials: { threshold_db: -24, ratio: 40, attack_ms: 1, release_ms: 100, makeup_db: 0 } },
+  ] }, 3);
+  d.add(1, 'compressor', 0);
+  for (const [k, v] of slotProgram(st.chain[0])) d.set(1, k, v, 0, true);
+  d.order([1], 0, true);
+  d.meter(true);
+  run(d, sine(128 * 40, 0.5), 40); // about -6 dBFS into -24 dB
+  const out = new Float32Array(d.meterSize);
+  assert.equal(d.takeMeter(out), 3 + 4);
+  assert.equal(out[3], 1);
+  const gr = out[6];
+  // -6 dBFS peaks, 18 dB over at ratio 4:1 (40 on the dial) want 13.5 dB off; the soft knee and detector take a little.
+  assert.ok(gr > 10 && gr < 16, `gain reduction ${gr} dB`);
+  assert.ok(out[5] < out[4], 'quieter out than in');
+  d.takeMeter(out);
+  assert.equal(out[6], 0, 'reset on take, nothing since');
+  d.set(1, 0, 0, 0, true); // bypass
+  run(d, sine(128 * 40, 0.5), 40);
+  d.takeMeter(out); // the switch's fade-out
+  run(d, sine(128 * 40, 0.5), 40);
+  d.takeMeter(out);
+  assert.equal(out[6], 0, 'bypassed: no gain reduction');
+});
+
+test('worklet: a meter opened before the node existed (pending) turns the taps on, with the compressor\'s GR', () => {
+  const w = processor({ slots: 3, chain: [{ uid: 5, type: 'compressor', program: [[0, 1], [1, -30], [2, 4]] }], order: [5],
+    pending: [{ t: 'meter', on: true }] });
+  const loud = sine(128, 0.5);
+  for (let i = 0; i < 60; i++) w.block(loud);
+  assert.ok(w.posted.length > 0, 'reports, with no live meter message');
+  const last = w.posted.at(-1);
+  assert.equal(last.d[3], 5);
+  assert.ok(last.d[4] > 0.4, `in ${last.d[4]}`);
+  assert.ok(last.d[6] > 5, `gain reduction ${last.d[6]} dB`);
 });
