@@ -240,7 +240,7 @@ async function main() {
       && [...more.querySelectorAll('.nc-field')].map((f) => f.querySelector('.nc-label').textContent).join() === 'Curve,Tone,Accent → drive,Accent → tone');
     const sl = card.querySelector('.nc-field[data-nc-slider] .nc-range');
     check('slots panel: slider fields are the kit\'s (label, range, readout, aria-valuetext)', sl && sl.closest('.nc-field').querySelector('.nc-label') && sl.getAttribute('aria-valuetext') === 'clean');
-    check('slots panel: EQ shows ASTRID\'s note', q('[data-testid="nc-fx-eq-1"] .nc-note').textContent === 'Low shelf 150 Hz, high shelf 6 kHz.');
+    check('slots panel: EQ shows its note (five bands: how to use the graph)', q('[data-testid="nc-fx-eq-1"] .nc-note').textContent === 'Drag a dot: up and down for gain, sideways for frequency, the wheel for Q.');
     q('[data-testid="nc-fx-down-drive-1"]').click();
     check('slots panel: move down (and the first card\'s up is disabled)', fx.getChain().map((x) => x.id).join() === 'eq-1,drive-1,flanger-1' && q('[data-testid="nc-fx-up-eq-1"]').disabled);
     q('[data-testid="nc-fx-up-flanger-1"]').click();
