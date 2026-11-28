@@ -39,6 +39,9 @@ const CASES = [
   { low_db: -12, mid_db: 9, mid_hz: 20, mid_q: 70, high_db: 6 },
   { low_db: 18, mid_db: 0, mid_hz: 50, mid_q: 40, high_db: 0 },
   { low_db: 0, mid_db: 14, mid_hz: 100, mid_q: 100, high_db: 18 },
+  // Five bands (2026-11-28): the new bells and moved shelves.
+  { low_db: 6, low_hz: 80, lm_db: -9, lm_hz: 300, lm_q: 60, mid_db: 3, mid_hz: 50, mid_q: 40, hm_db: 7, hm_hz: 4000, hm_q: 20, high_db: -6, high_hz: 10000 },
+  { lm_db: 12, lm_hz: 1500, lm_q: 100, hm_db: -18, hm_hz: 800, hm_q: 0 },
 ];
 
 test('eqResponse matches the engine\'s impulse response within 0.1 dB', () => {
@@ -54,14 +57,14 @@ test('eqResponse matches the engine\'s impulse response within 0.1 dB', () => {
 
 test('the bands follow the dial laws; 0 dB bands are flat and the total is their sum', () => {
   const b = eqBands({ low_db: 3, mid_db: -18, mid_hz: 48, mid_q: 0, high_db: -18 });
-  assert.deepEqual(b.map((x) => x.id), ['low', 'mid', 'high']);
-  assert.equal(b[0].hz, 150); assert.equal(b[2].hz, 6000);
-  assert.equal(b[1].hz, dialDsp(catalogDial('eq', 'mid_hz'), 48));
-  assert.equal(b[1].hz, 938);
-  assert.equal(b[1].q, 0.3);
+  assert.deepEqual(b.map((x) => x.id), ['low', 'lowmid', 'mid', 'highmid', 'high']);
+  assert.equal(b[0].hz, 150); assert.equal(b[4].hz, 6000);
+  assert.equal(b[1].hz, 400); assert.equal(b[3].hz, 3500); assert.equal(b[1].db, 0); assert.equal(b[3].db, 0);
+  assert.equal(b[2].hz, dialDsp(catalogDial('eq', 'mid_hz'), 48));
+  assert.equal(b[2].hz, 938);
+  assert.equal(b[2].q, 0.3);
   const r = eqResponse({ low_db: 0, mid_db: 6, mid_hz: 50, mid_q: 40, high_db: 0 }, SR, [100, 1000, 10000]);
-  assert.deepEqual([...r.bands[0]], [0, 0, 0]);
-  assert.deepEqual([...r.bands[2]], [0, 0, 0]);
+  for (const i of [0, 1, 3, 4]) assert.deepEqual([...r.bands[i]], [0, 0, 0]);
   assert.ok(Math.abs(r.total[1] - 6) < 0.01, 'the bell peaks at its gain at its centre');
   const flat = eqResponse({}, SR, [100, 1000]);
   assert.deepEqual([...flat.total], [0, 0]);
@@ -81,15 +84,22 @@ test('a drag or a key on a node maps to the right dials, rounded to their steps'
   assert.ok(Number.isInteger(m.mid_hz) && Number.isInteger(m.mid_q), 'whole dial steps');
   assert.ok(Math.abs(200 * 25 ** (m.mid_hz / 100) - 2000) / 2000 < 0.02);
   assert.ok(Math.abs(0.3 * 20 ** (m.mid_q / 100) - 1) < 0.02);
-  // Shelves move gain only (a frequency or Q is ignored); clamped to +-18.
-  assert.deepEqual(eqPatchDials(dials, 'low', { db: 40, hz: 900, q: 3 }), [['low_db', 18]]);
+  // Shelves move gain and frequency (since 2026-11-28; a Q is ignored), clamped to their ranges.
+  assert.deepEqual(eqPatchDials(dials, 'low', { db: 40, hz: 900, q: 3 }), [['low_db', 18], ['low_hz', 600]]);
+  assert.deepEqual(eqPatchDials(dials, 'high', { hz: 9000.4 }), [['high_hz', 9000]]);
+  // The new bells: gain, Hz (whole Hz) and Q on their own dials.
+  const lm = Object.fromEntries(eqPatchDials(dials, 'lowmid', { db: 4.2, hz: 250.3, q: 2 }));
+  assert.deepEqual([lm.lm_db, lm.lm_hz], [4, 250]);
+  assert.ok(Math.abs(0.3 * 20 ** (lm.lm_q / 100) - 2) < 0.06);
+  assert.deepEqual(eqPatchDials(dials, 'highmid', { hz: 50000 }), [['hm_hz', 12000]]);
   assert.deepEqual(eqPatchDials(dials, 'high', { db: -18.2 }), []);
   assert.deepEqual(eqPatchDials(dials, 'high', { db: -0.2 }), [['high_db', 0]]);
   // Unchanged values are left out.
   assert.deepEqual(eqPatchDials(dials, 'mid', { hz: 938 }), []);
   // Reset: the catalog defaults.
   assert.deepEqual(eqResetDials('mid'), [['mid_db', 0], ['mid_hz', 50], ['mid_q', 40]]);
-  assert.deepEqual(eqResetDials('low'), [['low_db', 0]]);
+  assert.deepEqual(eqResetDials('low'), [['low_db', 0], ['low_hz', 150]]);
+  assert.deepEqual(eqResetDials('highmid'), [['hm_db', 0], ['hm_hz', 3500], ['hm_q', 40]]);
 });
 
 test('eqGraph: the kit control, wired to the host\'s setter', () => {
@@ -100,16 +110,29 @@ test('eqGraph: the kit control, wired to the host\'s setter', () => {
   assert.equal(fromIndex, eqGraph);
   assert.equal(c.type, 'eqGraph');
   assert.equal(c.range, 18);
-  assert.deepEqual(c.bands.map((b) => [b.id, b.kind, b.hz, b.db]), [['low', 'lowshelf', 150, 3], ['mid', 'peak', 938, -18], ['high', 'highshelf', 6000, -18]]);
-  assert.equal(c.bands[1].valueText, '−18 dB at 938 Hz, Q 0.3');
-  assert.equal(c.bands[1].help, 'words');
+  assert.deepEqual(c.bands.map((b) => [b.id, b.kind, b.hz, b.db]), [['low', 'lowshelf', 150, 3], ['lowmid', 'peak', 400, 0], ['mid', 'peak', 938, -18], ['highmid', 'peak', 3500, 0], ['high', 'highshelf', 6000, -18]]);
+  assert.equal(c.bands[2].valueText, '−18 dB at 938 Hz, Q 0.3');
+  assert.equal(c.bands[2].help, 'words');
+  assert.ok(c.bands.every((b) => b.moveHz) && c.bands.map((b) => b.moveQ).join() === 'false,true,true,true,false');
+  assert.deepEqual([c.bands[0].minHz, c.bands[0].maxHz, c.bands[4].minHz, c.bands[4].maxHz], [30, 600, 2000, 16000]);
   assert.equal(c.spectrum, undefined, 'no output, no spectrum');
   const r = c.response(new Float64Array([938]));
-  assert.ok(Math.abs(r.bands[1][0] + 18) < 0.01);
+  assert.ok(Math.abs(r.bands[2][0] + 18) < 0.01);
   c.onBand('mid', { db: -12 });
   c.onReset('low');
   c.onReset('mid');
   assert.deepEqual(sets, [['mid_db', -12], ['low_db', 0], ['mid_db', 0], ['mid_hz', 50], ['mid_q', 40]]);
+});
+
+test('five bands: an EQ that never touches the new dials renders bit for bit as before (the new bells are skipped)', () => {
+  for (const dials of CASES.slice(0, 4)) {
+    const old = impulse(dials);
+    const same = impulse({ ...dials, low_hz: 150, high_hz: 6000, lm_db: 0, lm_hz: 400, lm_q: 40, hm_db: 0, hm_hz: 3500, hm_q: 40 });
+    assert.equal(old.findIndex((v, i) => !Object.is(v, same[i])), -1, JSON.stringify(dials));
+  }
+  // A new bell up then back to 0 dB: it is skipped again, so the output is the dry EQ's once its ring has died away.
+  const a = impulse({ low_db: 3 });
+  assert.ok(a.every(Number.isFinite));
 });
 
 test('fxSpectrum: one analyser per chain, connected only while open', () => {

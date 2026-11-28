@@ -50,7 +50,7 @@ var PLATE_IG = [0.75, 0.75, 0.625, 0.625];
 export var UNIT = { drive: 0, delay: 1, plate: 2, eq: 3, compressor: 4, width: 5, flanger: 6, chorus: 7, phaser: 8, lowpass: 9, highpass: 10, bandpass: 11, hall: 12, ensemble: 13, gate: 14, crunch: 15 };
 export var UNIT_TYPES = ['drive', 'delay', 'plate', 'eq', 'compressor', 'width', 'flanger', 'chorus', 'phaser', 'lowpass', 'highpass', 'bandpass', 'hall', 'ensemble', 'gate', 'crunch'];
 /** Params per unit (k = 0 is the on flag). */
-export var UNIT_NPARAMS = [8, 10, 6, 6, 6, 3, 5, 5, 6, 2, 3, 4, 9, 7, 16, 4];
+export var UNIT_NPARAMS = [8, 10, 6, 14, 6, 3, 5, 5, 6, 2, 3, 4, 9, 7, 16, 4];
 
 /** ctl() ops. Results are small integers (1 = true), never doubles. */
 export var OP_NONE = 0, OP_CLEAR = 1, OP_FADE_BEGIN = 2, OP_FADE_WORK = 3, OP_FADE_DONE = 4, OP_FADE_IDLE = 5,
@@ -778,41 +778,62 @@ function unitBase(type, step, set, clear, arrays, settleAll) {
   return { type: type, step: step, set: set, ctl: ctl, retarget: noRetarget, reset: function () { ctl(12, 0); } };
 }
 
-// EQ (ncEq*): a low shelf at 150 Hz, a bell, a high shelf at 6 kHz (ASTRID's widgets: low_hz 150, high_hz 6000,
-// mid_q, +-18 dB). All bands at 0 dB is the dry signal, passed through untouched. Coefficients follow moving dials
-// every 16 samples, then once more when they settle. k: 1 low dB, 2 mid dB, 3 mid Hz, 4 high dB, 5 mid Q.
+// EQ (ncEq*): a low shelf (150 Hz), a bell, a high shelf (6 kHz) as ASTRID's widgets (low_hz 150, high_hz 6000,
+// mid_q, +-18 dB); since 2026-11-28 also a Low-mid and a High-mid bell, and both shelves move (Peter: five bands). All
+// bands at 0 dB is the dry signal, passed through untouched. A Low-mid or High-mid at exactly 0 dB is skipped (its
+// filter never runs), and the shelves sit on their exact Hz once settled, so an EQ that never touches the new dials
+// renders ASTRID's samples bit for bit. Coefficients follow moving dials every 16 samples, then once more when they
+// settle. k: 1 low dB, 2 mid dB, 3 mid Hz, 4 high dB, 5 mid Q, 6 low Hz, 7 high Hz, 8 low-mid dB, 9 low-mid Hz,
+// 10 low-mid Q, 11 high-mid dB, 12 high-mid Hz, 13 high-mid Q.
 export function unitEq(E) {
   var sr = E.sr, IO = E.IO, D = new Float64Array(2);
   // 0 on, 1 onT, 2 slept, 3 lowS, 4 lowT, 5 midS, 6 midT, 7 hiS, 8 hiT, 9 logHzS, 10 logHzT, 11 lowHz, 12 highHz,
-  // 13 midQ, 14 range, 15 flat, 16 dirty, 17 tick
-  var A = new Float64Array(18), F = new Float64Array(27), P = new Float64Array(4);
+  // 13 midQ, 14 range, 15 flat, 16 dirty, 17 tick,
+  // 18 lmS, 19 lmT, 20 lmLogS, 21 lmLogT, 22 lmQ, 23 hmS, 24 hmT, 25 hmLogS, 26 hmLogT, 27 hmQ,
+  // 28 lowLogS, 29 lowLogT, 30 lowHzT (exact), 31 hiLogS, 32 hiLogT, 33 highHzT (exact), 34 lmOn, 35 hmOn
+  var A = new Float64Array(36), F = new Float64Array(45), P = new Float64Array(4);
   P[3] = sr;
   function init() {
     A.fill(0);
     A[9] = 6.907755278982137; A[10] = 6.907755278982137; A[11] = 150; A[12] = 6000; A[13] = 0.9; A[14] = 18; A[15] = 1; A[16] = 1;
-    biquadInit(F, 0); biquadInit(F, 9); biquadInit(F, 18);
+    A[20] = A[21] = Math.log(400); A[22] = 0.9; A[25] = A[26] = Math.log(3500); A[27] = 0.9;
+    A[28] = A[29] = Math.log(150); A[30] = 150; A[31] = A[32] = Math.log(6000); A[33] = 6000;
+    biquadInit(F, 0); biquadInit(F, 9); biquadInit(F, 18); biquadInit(F, 27); biquadInit(F, 36);
   }
   init();
-  function clear() { biquadClear(F, 0); biquadClear(F, 9); biquadClear(F, 18); }
+  function clear() { biquadClear(F, 0); biquadClear(F, 9); biquadClear(F, 18); biquadClear(F, 27); biquadClear(F, 36); }
   function set(k, snap) {
     var x0;
     if (k === 0) { x0 = E.V[0] ? 1 : 0; E.V[0] = x0; if (x0 && A[2] === 1) { clear(); A[2] = 0; } A[1] = x0; if (snap) A[0] = x0; return true; }
     var x;
-    if (k === 1 || k === 2 || k === 4) {
+    if (k === 1 || k === 2 || k === 4 || k === 8 || k === 11) {
       if (!(E.V[1] = -18, E.V[2] = 18, take(E))) return false; // A[14]: ASTRID's widgets always carry low_hz/high_hz/mid_q, so +-18 dB
-      x = E.V[0]; var s = k === 1 ? 3 : k === 2 ? 5 : 7;
+      x = E.V[0]; var s = k === 1 ? 3 : k === 2 ? 5 : k === 4 ? 7 : k === 8 ? 18 : 23;
       A[s + 1] = x; if (snap) A[s] = x;
     } else if (k === 3) {
       if (!(E.V[1] = 200, E.V[2] = 5000, take(E))) return false;
       A[10] = Math.log(E.V[0]); if (snap) A[9] = A[10];
-    } else if (k === 5) {
+    } else if (k === 5 || k === 10 || k === 13) {
       if (!(E.V[1] = 0.3, E.V[2] = 6, take(E))) return false;
-      A[13] = E.V[0];
+      A[k === 5 ? 13 : k === 10 ? 22 : 27] = E.V[0];
+    } else if (k === 6 || k === 7) {
+      if (!(E.V[1] = k === 6 ? 30 : 2000, E.V[2] = k === 6 ? 600 : 16000, take(E))) return false;
+      var t = k === 6 ? 29 : 32;
+      A[t] = Math.log(E.V[0]); A[t + 1] = E.V[0];
+      if (snap) { A[t - 1] = A[t]; A[k === 6 ? 11 : 12] = E.V[0]; }
+    } else if (k === 9 || k === 12) {
+      if (!(E.V[1] = k === 9 ? 60 : 800, E.V[2] = k === 9 ? 1500 : 12000, take(E))) return false;
+      var u = k === 9 ? 21 : 26;
+      A[u] = Math.log(E.V[0]); if (snap) A[u - 1] = A[u];
     } else return false;
     A[16] = 1;
     return true;
   }
   function settleAll() { settle(A, 0); }
+  function glide(s, k, eps) {
+    A[s] += (A[s + 1] - A[s]) * k;
+    if (Math.abs(A[s + 1] - A[s]) < eps) A[s] = A[s + 1];
+  }
   function step() {
     if (!begin(E, A, D)) return;
     var k = E.kFast;
@@ -827,9 +848,17 @@ export function unitEq(E) {
       if (Math.abs(A[8] - A[7]) < 1e-4) A[7] = A[8];
       if (Math.abs(A[10] - A[9]) < 1e-5) A[9] = A[10];
     }
-    var flat = A[3] === 0 && A[5] === 0 && A[7] === 0;
+    // The five-band additions: their own glides (never touched by an older EQ, so they stay still there).
+    var more = A[18] !== A[19] || A[20] !== A[21] || A[23] !== A[24] || A[25] !== A[26] || A[28] !== A[29] || A[31] !== A[32];
+    if (more) {
+      glide(18, k, 1e-4); glide(20, k, 1e-5); glide(23, k, 1e-4); glide(25, k, 1e-5);
+      if (A[28] !== A[29]) { glide(28, k, 1e-5); A[11] = A[28] === A[29] ? A[30] : Math.exp(A[28]); }
+      if (A[31] !== A[32]) { glide(31, k, 1e-5); A[12] = A[31] === A[32] ? A[33] : Math.exp(A[31]); }
+      moving = true;
+    }
+    var flat = A[3] === 0 && A[5] === 0 && A[7] === 0 && A[18] === 0 && A[23] === 0;
     if (flat) {
-      if (A[15] === 0) { clear(); A[15] = 1; }
+      if (A[15] === 0) { clear(); A[15] = 1; A[34] = 0; A[35] = 0; }
       finish(IO, D, A);
       return;
     }
@@ -837,13 +866,21 @@ export function unitEq(E) {
     var redo = false;
     if (moving) { A[16] = 1; redo = (A[17] & 15) === 0; A[17]++; }
     else if (A[16] === 1) { redo = true; A[16] = 0; A[17] = 0; }
+    // A new bell at exactly 0 dB is skipped; it starts from a clean filter when it comes on.
+    var lm = A[18] !== 0, hm = A[23] !== 0;
+    if (lm && A[34] === 0) { biquadClear(F, 27); A[34] = 1; redo = true; } else if (!lm) A[34] = 0;
+    if (hm && A[35] === 0) { biquadClear(F, 36); A[35] = 1; redo = true; } else if (!hm) A[35] = 0;
     if (redo) {
       P[0] = A[11]; P[1] = A[3]; P[2] = 0.7071; biquadSet(F, 0, 0, P);
       P[0] = Math.exp(A[9]); P[1] = A[5]; P[2] = A[13]; biquadSet(F, 9, 1, P);
       P[0] = A[12]; P[1] = A[7]; P[2] = 0.7071; biquadSet(F, 18, 2, P);
+      if (lm) { P[0] = Math.exp(A[20]); P[1] = A[18]; P[2] = A[22]; biquadSet(F, 27, 1, P); }
+      if (hm) { P[0] = Math.exp(A[25]); P[1] = A[23]; P[2] = A[27]; biquadSet(F, 36, 1, P); }
     }
     biquadStep(F, 0, IO);
+    if (lm) biquadStep(F, 27, IO);
     biquadStep(F, 9, IO);
+    if (hm) biquadStep(F, 36, IO);
     biquadStep(F, 18, IO);
     finish(IO, D, A);
   }
