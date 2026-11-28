@@ -21,7 +21,8 @@ test('types, order, labels, notes, hidden and the Add menu are ASTRID\'s (with n
   for (const def of H.HACK_DEFINITIONS) {
     const e = catalogEntry(def.type);
     assert.equal(e.label, def.label);
-    assert.equal(e.note, def.note);
+    // The EQ has five bands since 2026-11-28 (nc-fx first): its note says how to use the graph.
+    if (def.type !== 'eq') assert.equal(e.note, def.note);
     assert.equal(!!e.hidden, !!def.hidden);
   }
 });
@@ -44,7 +45,8 @@ test('every ASTRID dial: label, range, default, options; nc-fx\'s extra dials ar
     }
   }
   assert.deepEqual(CATALOG.filter((e) => !e.own).flatMap((e) => e.dials.filter((d) => d.more).map((d) => `${e.type}.${d.key}`)),
-    ['delay.tone', 'delay.low_cut', 'delay.mode', 'delay.send', 'delay.mod_send', 'delay.beats_free', 'drive.curve', 'drive.tone', 'drive.mod_drive', 'drive.mod_tone']);
+    ['delay.tone', 'delay.low_cut', 'delay.mode', 'delay.send', 'delay.mod_send', 'delay.beats_free', 'eq.low_hz', 'eq.lm_db', 'eq.lm_hz', 'eq.lm_q', 'eq.hm_db', 'eq.hm_hz', 'eq.hm_q', 'eq.high_hz',
+      'drive.curve', 'drive.tone', 'drive.mod_drive', 'drive.mod_tone']);
 });
 
 test('every readout, at every dial value and several tempos, is ASTRID\'s format() exactly', () => {

@@ -66,20 +66,31 @@ function dialValue(dials, key) {
 }
 
 /**
- * The bands an EQ's dials (UI units, as on the sliders and in the state) play, in engine units:
- * [{ id: 'low', kind: 0, hz: 150, db }, { id: 'mid', kind: 1, hz, db, q }, { id: 'high', kind: 2, hz: 6000, db }].
+ * The five bands an EQ's dials (UI units, as on the sliders and in the state) play, in engine units, low to high:
+ * low shelf, low-mid bell, mid bell, high-mid bell, high shelf (Peter, 2026-11-28). kind 0 low shelf, 1 bell, 2 high shelf.
  */
 export function eqBands(dials) {
+  var bell = function (id, pre) {
+    return { id: id, kind: 1, hz: dialDsp(dial(pre + '_hz'), dialValue(dials, pre + '_hz')), db: dialValue(dials, pre + '_db'), q: dialDsp(dial(pre + '_q'), dialValue(dials, pre + '_q')) };
+  };
   return [
-    { id: 'low', kind: 0, hz: EQ_LOW_HZ, db: dialValue(dials, 'low_db'), q: Math.SQRT1_2 },
-    { id: 'mid', kind: 1, hz: dialDsp(dial('mid_hz'), dialValue(dials, 'mid_hz')), db: dialValue(dials, 'mid_db'), q: dialDsp(dial('mid_q'), dialValue(dials, 'mid_q')) },
-    { id: 'high', kind: 2, hz: EQ_HIGH_HZ, db: dialValue(dials, 'high_db'), q: Math.SQRT1_2 }
+    { id: 'low', kind: 0, hz: dialValue(dials, 'low_hz'), db: dialValue(dials, 'low_db'), q: Math.SQRT1_2 },
+    bell('lowmid', 'lm'),
+    bell('mid', 'mid'),
+    bell('highmid', 'hm'),
+    { id: 'high', kind: 2, hz: dialValue(dials, 'high_hz'), db: dialValue(dials, 'high_db'), q: Math.SQRT1_2 }
   ];
 }
+/** Each band's dials: gain, frequency, and (bells) Q. */
+var BAND_DIALS = {
+  low: { db: 'low_db', hz: 'low_hz' }, lowmid: { db: 'lm_db', hz: 'lm_hz', q: 'lm_q' }, mid: { db: 'mid_db', hz: 'mid_hz', q: 'mid_q' },
+  highmid: { db: 'hm_db', hz: 'hm_hz', q: 'hm_q' }, high: { db: 'high_db', hz: 'high_hz' }
+};
+var ALL_DIALS = ['low_db', 'low_hz', 'lm_db', 'lm_hz', 'lm_q', 'mid_db', 'mid_hz', 'mid_q', 'hm_db', 'hm_hz', 'hm_q', 'high_db', 'high_hz'];
 
 /**
  * The EQ's response at each frequency in `freqs` (Hz), in dB: the combined curve and each band's own. A band at
- * 0 dB is exactly flat, as in the engine (all three at 0 dB is a wire).
+ * 0 dB is exactly flat, as in the engine (all five at 0 dB is a wire).
  * @returns {{ total: Float64Array, bands: Float64Array[] }}
  */
 export function eqResponse(dials, sampleRate, freqs) {
@@ -110,10 +121,10 @@ export function eqMidQDial(q) {
   var law = dial('mid_q').dsp.law;
   return clamp(law.div * Math.log(q / law.pow[0]) / Math.log(law.pow[1]), 0, 100);
 }
+/** A frequency dial's value for hz: Mid's through its law, the others are in Hz. */
+function hzDial(key, hz) { return key === 'mid_hz' ? eqMidHzDial(hz) : hz; }
 
-/** The dial a band's gain is on. */
-var GAIN_KEY = { low: 'low_db', mid: 'mid_db', high: 'high_db' };
-var LABEL = { low: 'Low', mid: 'Mid', high: 'High' };
+var LABEL = { low: 'Low', lowmid: 'Low-mid', mid: 'Mid', highmid: 'High-mid', high: 'High' };
 
 /**
  * A band patch from the graph (engine units: hz, db, q) as dial changes, each rounded to its dial's step and
@@ -127,14 +138,17 @@ export function eqPatchDials(dials, id, patch) {
     if (x === 0) x = 0; // no -0
     if (x !== dialValue(dials, k)) out.push([k, x]);
   }
-  if (typeof patch.db === 'number' && GAIN_KEY[id]) push(GAIN_KEY[id], patch.db);
-  if (id === 'mid' && typeof patch.hz === 'number' && patch.hz > 0) push('mid_hz', eqMidHzDial(patch.hz));
-  if (id === 'mid' && typeof patch.q === 'number' && patch.q > 0) push('mid_q', eqMidQDial(patch.q));
+  var b = BAND_DIALS[id];
+  if (!b) return out;
+  if (typeof patch.db === 'number') push(b.db, patch.db);
+  if (typeof patch.hz === 'number' && patch.hz > 0) push(b.hz, hzDial(b.hz, patch.hz));
+  if (b.q && typeof patch.q === 'number' && patch.q > 0) push(b.q, eqMidQDial(patch.q));
   return out;
 }
-/** The dials that reset a band: its gain (and, for the mid, its frequency and Q) back to the catalog default. */
+/** The dials that reset a band: its gain, frequency and (bells) Q back to the catalog default. */
 export function eqResetDials(id) {
-  var keys = id === 'mid' ? ['mid_db', 'mid_hz', 'mid_q'] : GAIN_KEY[id] ? [GAIN_KEY[id]] : [];
+  var b = BAND_DIALS[id];
+  var keys = b ? [b.db, b.hz].concat(b.q ? [b.q] : []) : [];
   return keys.map(function (k) { return [k, dial(k).default]; });
 }
 
@@ -181,7 +195,7 @@ export function fxSpectrum(fx) {
 export function eqGraph(fx, ref, opts) {
   var o = opts || {};
   var dials = {};
-  ['low_db', 'mid_db', 'mid_hz', 'mid_q', 'high_db'].forEach(function (k) {
+  ALL_DIALS.forEach(function (k) {
     var v = fx && typeof fx.getParam === 'function' ? fx.getParam(ref, k) : undefined;
     dials[k] = typeof v === 'number' ? v : dial(k).default;
   });
@@ -196,10 +210,10 @@ export function eqGraph(fx, ref, opts) {
       label: LABEL[b.id],
       kind: b.kind === 0 ? 'lowshelf' : b.kind === 1 ? 'peak' : 'highshelf',
       hz: b.hz, db: b.db, q: b.q,
-      moveHz: b.id === 'mid', moveQ: b.id === 'mid',
-      minHz: b.id === 'mid' ? 200 : b.hz, maxHz: b.id === 'mid' ? 5000 : b.hz,
+      moveHz: true, moveQ: b.kind === 1,
+      minHz: b.id === 'mid' ? 200 : dial(BAND_DIALS[b.id].hz).min, maxHz: b.id === 'mid' ? 5000 : dial(BAND_DIALS[b.id].hz).max,
       minQ: 0.3, maxQ: 6,
-      valueText: b.id === 'mid' ? g + ' at ' + at + ', Q ' + b.q.toFixed(1) : g + (b.id === 'low' ? ', shelf below ' : ', shelf above ') + at,
+      valueText: b.kind === 1 ? g + ' at ' + at + ', Q ' + b.q.toFixed(1) : g + (b.id === 'low' ? ', shelf below ' : ', shelf above ') + at,
       help: help[b.id]
     };
   });

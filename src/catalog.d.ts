@@ -26,7 +26,7 @@ export interface FxCatalogDial {
   stepWhen?: ReadonlyArray<{ key: string; value: number; step: number }>;
   curve?: 'log'; overriddenBy?: string; exact?: true; minOn?: number; tempoSynced?: true;
 }
-export interface FxCatalogEntry { type: FxType; label: string; hidden?: true; fixed?: true; /** nc-fx's own effect (Hall, Ensemble, Gate), not one of ASTRID's hacks. */ own?: true; /** The slot carries a step `pattern` (Gate). */ pattern?: true; tempoSynced?: true; note?: string; dials: ReadonlyArray<FxCatalogDial>; plugin?: import('./plugin.js').FxPluginInfo }
+export interface FxCatalogEntry { type: FxType; label: string; hidden?: true; fixed?: true; /** nc-fx's own effect (Hall, Ensemble, Gate), not one of ASTRID's hacks. */ own?: true; /** The slot carries a step `pattern` (Gate). */ pattern?: true; tempoSynced?: true; note?: string; /** The graph is the control: every dial sits under one fold with this title (EQ: 'Values'). */ fold?: string; dials: ReadonlyArray<FxCatalogDial>; plugin?: import('./plugin.js').FxPluginInfo }
 
 export const CATALOG: ReadonlyArray<FxCatalogEntry>;
 export const CATALOG_TYPES: ReadonlyArray<FxType>;

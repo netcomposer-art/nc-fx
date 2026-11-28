@@ -135,12 +135,24 @@ export var CATALOG = [
     d('stages', 'Stages', 4, 8, 6, 3, { fmt: 'stages' }, { step: null, options: opts([[4, '4'], [6, '6'], [8, '8']]) }),
     d('feedback', 'Feedback', 0, 90, 30, 4, PCT, { dsp: C100, unit: '%' }),
     d('mix', 'Mix', 0, 100, 50, 5, WET, { dsp: C100, unit: '%' })] },
-  { type: 'eq', label: 'EQ', note: 'Low shelf 150 Hz, high shelf 6 kHz.', dials: [
+  // Five bands since 2026-11-28 (Peter: "show all five bands and make them editable"): the low and high shelves move,
+  // and a Low-mid and a High-mid bell join the Mid. The new dials are nc-fx's (`more`), each at 0 dB / ASTRID's
+  // 150 Hz and 6 kHz by default, so every older EQ plays exactly as before. `fold`: the graph is the control; every
+  // dial sits under one fold with that title (hosts put them all in the kit card's `more`, moreLabel = fold).
+  { type: 'eq', label: 'EQ', note: 'Drag a dot: up and down for gain, sideways for frequency, the wheel for Q.', fold: 'Values', dials: [
     d('low_db', 'Low', -18, 18, 0, 1, DB, { unit: 'dB' }),
     d('mid_db', 'Mid', -18, 18, 0, 2, DB, { unit: 'dB' }),
     d('mid_hz', 'Mid at', 0, 100, 50, 3, { fmt: 'hz', law: L.midHz, astrid: true }, { dsp: { law: L.midHz } }),
     d('mid_q', 'Mid Q', 0, 100, 40, 5, { fmt: 'q', law: L.eqQ }, { dsp: { law: L.eqQ } }),
-    d('high_db', 'High', -18, 18, 0, 4, DB, { unit: 'dB' })] },
+    d('high_db', 'High', -18, 18, 0, 4, DB, { unit: 'dB' }),
+    d('low_hz', 'Low at', 30, 600, 150, 6, { fmt: 'hz', astrid: true }, { unit: 'Hz', curve: 'log', more: true }),
+    d('lm_db', 'Low-mid', -18, 18, 0, 8, DB, { unit: 'dB', more: true }),
+    d('lm_hz', 'Low-mid at', 60, 1500, 400, 9, { fmt: 'hz', astrid: true }, { unit: 'Hz', curve: 'log', more: true }),
+    d('lm_q', 'Low-mid Q', 0, 100, 40, 10, { fmt: 'q', law: L.eqQ }, { dsp: { law: L.eqQ }, more: true }),
+    d('hm_db', 'High-mid', -18, 18, 0, 11, DB, { unit: 'dB', more: true }),
+    d('hm_hz', 'High-mid at', 800, 12000, 3500, 12, { fmt: 'hz', astrid: true }, { unit: 'Hz', curve: 'log', more: true }),
+    d('hm_q', 'High-mid Q', 0, 100, 40, 13, { fmt: 'q', law: L.eqQ }, { dsp: { law: L.eqQ }, more: true }),
+    d('high_hz', 'High at', 2000, 16000, 6000, 7, { fmt: 'hz', astrid: true }, { unit: 'Hz', curve: 'log', more: true })] },
   { type: 'drive', label: 'Drive', fixed: true, dials: [
     // drive_db: whole dB in Smooth (ASTRID); 0.1 dB in Acid, so Bass's amounts round-trip (stepWhen).
     d('drive_db', 'Drive', 0, 24, 0, 1, { fmt: 'db', zero: 'clean' }, { unit: 'dB', stepWhen: [{ key: 'curve', value: 1, step: 0.1 }] }),
@@ -240,7 +252,7 @@ export function formatDial(dial, v, bpm) {
     case 'fixed': return (f.add + v / f.div).toFixed(f.digits) + f.suffix;
     case 'hz':
       if (f.offAt !== undefined && v >= f.offAt) return 'off';
-      if (!f.law) return v === 0 && f.zero ? f.zero : v + ' Hz';
+      if (!f.law) return v === 0 && f.zero ? f.zero : f.astrid ? fmtHz(v) : v + ' Hz';
       h = lawValue(f.law, v);
       if (h === null) return f.zero || 'open';
       return f.astrid ? fmtHz(h) : h + ' Hz';

@@ -1,17 +1,17 @@
-/** The EQ's fixed low shelf (Hz), high shelf (Hz) and gain range (dB, each way). */
+/** The EQ's default low shelf (Hz), high shelf (Hz) and its gain range (dB, each way). The shelves move since 2026-11-28 (low_hz, high_hz). */
 export const EQ_LOW_HZ: 150;
 export const EQ_HIGH_HZ: 6000;
 export const EQ_RANGE_DB: 18;
 
-/** EQ dials in UI units (as on the sliders): low_db, mid_db, mid_hz (0-100), mid_q (0-100), high_db. */
-export type EqDials = Partial<Record<'low_db' | 'mid_db' | 'mid_hz' | 'mid_q' | 'high_db', number>>;
-export interface EqBand { id: 'low' | 'mid' | 'high'; kind: 0 | 1 | 2; hz: number; db: number; q: number }
+/** EQ dials in UI units (as on the sliders): gains in dB, mid_hz / *_q 0-100 (laws), the other frequencies in Hz. */
+export type EqDials = Partial<Record<'low_db' | 'low_hz' | 'lm_db' | 'lm_hz' | 'lm_q' | 'mid_db' | 'mid_hz' | 'mid_q' | 'hm_db' | 'hm_hz' | 'hm_q' | 'high_db' | 'high_hz', number>>;
+export interface EqBand { id: 'low' | 'lowmid' | 'mid' | 'highmid' | 'high'; kind: 0 | 1 | 2; hz: number; db: number; q: number }
 
 /** One band's normalised coefficients [b0, b1, b2, a1, a2], as the engine computes them. kind 0 low shelf, 1 bell, 2 high shelf. */
 export function eqCoefficients(kind: 0 | 1 | 2, hz: number, db: number, q: number, sampleRate: number): [number, number, number, number, number];
 /** The bands the dials play, in engine units. */
 export function eqBands(dials: EqDials): EqBand[];
-/** The response in dB at each frequency (Hz): the combined curve and each band's own (low, mid, high). */
+/** The response in dB at each frequency (Hz): the combined curve and each band's own (low, low-mid, mid, high-mid, high). */
 export function eqResponse(dials: EqDials, sampleRate: number, freqs: ArrayLike<number>): { total: Float64Array; bands: Float64Array[] };
 /** A graph patch (engine units) as dial changes, rounded to each dial's step; unchanged dials left out. */
 export function eqPatchDials(dials: EqDials, id: string, patch: { hz?: number; db?: number; q?: number }): Array<[string, number]>;
@@ -53,7 +53,7 @@ export interface EqGraphOptions {
   /** false while the EQ is bypassed: the curve is drawn quiet. */
   on?: boolean;
   /** Hover words (data-nc-help) for the graph and each band's node. */
-  help?: { graph?: string; low?: string; mid?: string; high?: string };
+  help?: { graph?: string; low?: string; lowmid?: string; mid?: string; highmid?: string; high?: string };
   /** false: no spectrum behind the curve. */
   spectrum?: false;
 }
